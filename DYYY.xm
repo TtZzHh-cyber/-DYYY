@@ -3183,6 +3183,9 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
             [filtered addObject:obj];
             continue;
         }
+        // 只有当shareRecExtra不为空时才过滤点赞量低的视频和关键词
+        if ([self.referString isEqualToString:@"homepage_hot"]) {
+        NSInteger filterLowLikesThreshold = DYYYGetInteger(@"DYYYFilterLowLikes");
         // 拿点赞数
         NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
         if (!digg || digg.integerValue >= threshold) {
