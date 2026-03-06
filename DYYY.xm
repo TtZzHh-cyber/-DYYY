@@ -3161,12 +3161,21 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 }
 
 %end
+
 // 推荐页低赞过滤
 %hook AWEHotListDataController
 
 - (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
-    // ✅ 先判断是否是推荐页
-    if ([self.referString isEqualToString:@"homepage_hot"]) {
+    // 使用 KVC 尝试获取 referString，避免编译错误
+    NSString *referString = nil;
+    @try {
+        referString = [self valueForKey:@"referString"];
+    } @catch (NSException *e) {
+        // 如果没有 referString 属性，忽略
+    }
+    
+    // 判断是否是推荐页
+    if ([referString isEqualToString:@"homepage_hot"]) {
         NSArray *orig = %orig;
         if (!orig || orig.count == 0) return orig;
         
@@ -3194,7 +3203,6 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
         return filtered;
     }
     
-    // 如果不是推荐页，返回原始数据
     return %orig;
 }
 
