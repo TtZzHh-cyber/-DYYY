@@ -3194,6 +3194,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     }
     return filtered;
 }
+}
 
 %end
 
