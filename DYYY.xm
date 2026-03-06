@@ -3162,48 +3162,60 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
-// 推荐页低赞过滤
+// 推荐页低赞过滤，兼容性强
 %hook AWEHotListDataController
 
 - (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
-    // 使用 KVC 尝试获取 referString，避免编译错误
-    NSString *referString = nil;
-    @try {
-        referString = [self valueForKey:@"referString"];
-    } @catch (NSException *e) {
-        // 如果没有 referString 属性，忽略
-    }
-    
-    // 判断是否是推荐页
-    if ([referString isEqualToString:@"homepage_hot"]) {
-        NSArray *orig = %orig;
-        if (!orig || orig.count == 0) return orig;
-        
-        NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
-        if (threshold <= 0) return orig;
-        
-        NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
-        for (id obj in orig) {
-            if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
-                [filtered addObject:obj];
-                continue;
-            }
+    NSArray *orig = %orig;
+    if (!orig || orig.count == 0) return orig;
+
+    NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
+    if (threshold <= 0) return orig;
+
+    // 🔹 安全判断：只在推荐页过滤
+    BOOL isHotPage = NO;
+    for (id obj in orig) {
+        if ([obj isKindOfClass:%c(AWEAwemeModel)]) {
             AWEAwemeModel *m = (AWEAwemeModel *)obj;
-            // 广告不管
-            if (m.isAds) {
-                [filtered addObject:obj];
-                continue;
+            // 一般推荐页视频有 sectionType 或 source 标记为 "hot" 或 "recommend"
+            if ([m respondsToSelector:@selector(sectionType)]) {
+                NSString *section = [m valueForKey:@"sectionType"];
+                if ([section isKindOfClass:[NSString class]] &&
+                    ([section.lowercaseString containsString:@"hot"] ||
+                     [section.lowercaseString containsString:@"recommend"])) {
+                    isHotPage = YES;
+                }
             }
-            // 拿点赞数
-            NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
-            if (!digg || digg.integerValue >= threshold) {
-                [filtered addObject:obj];
-            }
+            break; // 只检查第一个视频即可
         }
-        return filtered;
     }
-    
-    return %orig;
+
+    if (!isHotPage) return orig; // 不是推荐页，不过滤
+
+    // 🔹 执行低赞过滤
+    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
+    for (id obj in orig) {
+        if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
+            [filtered addObject:obj];
+            continue;
+        }
+
+        AWEAwemeModel *m = (AWEAwemeModel *)obj;
+
+        // 广告不管
+        if (m.isAds) {
+            [filtered addObject:obj];
+            continue;
+        }
+
+        // 点赞数过滤
+        NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
+        if (!digg || digg.integerValue >= threshold) {
+            [filtered addObject:obj];
+        }
+    }
+
+    return filtered;
 }
 
 %end
