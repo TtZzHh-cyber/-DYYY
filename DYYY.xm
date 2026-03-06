@@ -3162,6 +3162,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
+// 微优化版推荐页低赞过滤（最终版+性能优化）
 %hook AWEHotListDataController
 
 - (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
@@ -3171,25 +3172,42 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
     if (threshold <= 0) return orig;
 
-    // 🔹 只在推荐页执行过滤
-    // 这里使用一个最稳的方法：检查 Controller 类名
-    NSString *className = NSStringFromClass([self class]);
-    if (![className containsString:@"HotList"]) { 
-        // 不是推荐页 Controller，直接返回
+    // 🔹 安全判断：只在推荐页调用时生效
+    BOOL isHotPage = NO;
+
+    // 遍历调用栈前 6 行
+    NSArray<NSString *> *stack = [NSThread callStackSymbols];
+    NSUInteger checkLines = MIN(stack.count, 6);
+    for (NSUInteger i = 0; i < checkLines; i++) {
+        NSString *line = stack[i];
+        if ([line containsString:@"HotPage"] || [line containsString:@"HotList"]) {
+            isHotPage = YES;
+            break;
+        }
+    }
+
+    if (!isHotPage) {
+        // 不是推荐页，直接返回原数组
         return orig;
     }
 
+    // 🔹 执行低赞过滤
     NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
     for (id obj in orig) {
         if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
             [filtered addObject:obj];
             continue;
         }
+
         AWEAwemeModel *m = (AWEAwemeModel *)obj;
+
+        // 广告不管
         if (m.isAds) {
             [filtered addObject:obj];
             continue;
         }
+
+        // 点赞数过滤
         NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
         if (!digg || digg.integerValue >= threshold) {
             [filtered addObject:obj];
@@ -3200,6 +3218,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 }
 
 %end
+
 %hook AWEIMFeedVideoQuickReplayInputViewController
 
 - (void)viewDidLayoutSubviews {
