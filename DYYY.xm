@@ -4402,38 +4402,6 @@ static NSHashTable *processedParentViews = nil;
         }
     }
 
-  // 推荐页低赞过滤
-%hook AWEHotListDataController
-
-- (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
-    NSArray *orig = %orig;
-    if (!orig || orig.count == 0) return orig;
-    
-    NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
-    if (threshold <= 0) return orig;
-    
-    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
-    for (id obj in orig) {
-        if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
-            [filtered addObject:obj];
-            continue;
-        }
-        AWEAwemeModel *m = (AWEAwemeModel *)obj;
-        // 广告不管
-        if (m.isAds) {
-            [filtered addObject:obj];
-            continue;
-        }
-        // 拿点赞数
-        NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
-        if (!digg || digg.integerValue >= threshold) {
-            [filtered addObject:obj];
-        }
-    }
-    return filtered;
-}
-
-%end
 
         // 过滤包含特定关键词的视频
         if (keywordsList.count > 0) {
@@ -8524,3 +8492,35 @@ static void findTargetViewInView(UIView *view) {
                                                     }];
     }
 }
+// 推荐页低赞过滤
+%hook AWEHotListDataController
+
+- (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
+    NSArray *orig = %orig;
+    if (!orig || orig.count == 0) return orig;
+    
+    NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
+    if (threshold <= 0) return orig;
+    
+    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
+    for (id obj in orig) {
+        if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
+            [filtered addObject:obj];
+            continue;
+        }
+        AWEAwemeModel *m = (AWEAwemeModel *)obj;
+        // 广告不管
+        if (m.isAds) {
+            [filtered addObject:obj];
+            continue;
+        }
+        // 拿点赞数
+        NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
+        if (!digg || digg.integerValue >= threshold) {
+            [filtered addObject:obj];
+        }
+    }
+    return filtered;
+}
+
+%end
