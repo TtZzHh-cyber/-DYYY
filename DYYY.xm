@@ -3162,58 +3162,34 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
-// 微优化版推荐页低赞过滤（最终版+性能优化）
+// 推荐页低赞过滤
 %hook AWEHotListDataController
 
 - (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
     NSArray *orig = %orig;
     if (!orig || orig.count == 0) return orig;
-
+    
     NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
     if (threshold <= 0) return orig;
-
-    // 🔹 安全判断：只在推荐页调用时生效
-    BOOL isHotPage = NO;
-
-    // 遍历调用栈前 6 行
-    NSArray<NSString *> *stack = [NSThread callStackSymbols];
-    NSUInteger checkLines = MIN(stack.count, 6);
-    for (NSUInteger i = 0; i < checkLines; i++) {
-        NSString *line = stack[i];
-        if ([line containsString:@"HotPage"] || [line containsString:@"HotList"]) {
-            isHotPage = YES;
-            break;
-        }
-    }
-
-    if (!isHotPage) {
-        // 不是推荐页，直接返回原数组
-        return orig;
-    }
-
-    // 🔹 执行低赞过滤
+    
     NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
     for (id obj in orig) {
         if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
             [filtered addObject:obj];
             continue;
         }
-
         AWEAwemeModel *m = (AWEAwemeModel *)obj;
-
         // 广告不管
         if (m.isAds) {
             [filtered addObject:obj];
             continue;
         }
-
-        // 点赞数过滤
+        // 拿点赞数
         NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
         if (!digg || digg.integerValue >= threshold) {
             [filtered addObject:obj];
         }
     }
-
     return filtered;
 }
 
