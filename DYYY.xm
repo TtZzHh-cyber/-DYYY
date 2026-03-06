@@ -4460,7 +4460,7 @@ static NSHashTable *processedParentViews = nil;
     }
     return shouldFilterAds || shouldFilterRecLive || shouldFilterAllLive || shouldFilterHotSpot || shouldskipPhoto || shouldskipPhotoText || shouldFilterHDR || shouldFilterLowLikes || shouldFilterKeywords || shouldFilterProp ||
            shouldFilterTime || shouldFilterUser;
-}
+
 
 - (AWEECommerceLabel *)ecommerceBelowLabel {
     if (DYYYGetBool(@"DYYYHideHisShop")) {
