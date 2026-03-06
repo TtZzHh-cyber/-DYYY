@@ -3162,7 +3162,6 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
-// 推荐页低赞过滤，兼容性强
 %hook AWEHotListDataController
 
 - (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
@@ -3172,43 +3171,25 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
     if (threshold <= 0) return orig;
 
-    // 🔹 安全判断：只在推荐页过滤
-    BOOL isHotPage = NO;
-    for (id obj in orig) {
-        if ([obj isKindOfClass:%c(AWEAwemeModel)]) {
-            AWEAwemeModel *m = (AWEAwemeModel *)obj;
-            // 一般推荐页视频有 sectionType 或 source 标记为 "hot" 或 "recommend"
-            if ([m respondsToSelector:@selector(sectionType)]) {
-                NSString *section = [m valueForKey:@"sectionType"];
-                if ([section isKindOfClass:[NSString class]] &&
-                    ([section.lowercaseString containsString:@"hot"] ||
-                     [section.lowercaseString containsString:@"recommend"])) {
-                    isHotPage = YES;
-                }
-            }
-            break; // 只检查第一个视频即可
-        }
+    // 🔹 只在推荐页执行过滤
+    // 这里使用一个最稳的方法：检查 Controller 类名
+    NSString *className = NSStringFromClass([self class]);
+    if (![className containsString:@"HotList"]) { 
+        // 不是推荐页 Controller，直接返回
+        return orig;
     }
 
-    if (!isHotPage) return orig; // 不是推荐页，不过滤
-
-    // 🔹 执行低赞过滤
     NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
     for (id obj in orig) {
         if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
             [filtered addObject:obj];
             continue;
         }
-
         AWEAwemeModel *m = (AWEAwemeModel *)obj;
-
-        // 广告不管
         if (m.isAds) {
             [filtered addObject:obj];
             continue;
         }
-
-        // 点赞数过滤
         NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
         if (!digg || digg.integerValue >= threshold) {
             [filtered addObject:obj];
@@ -3219,7 +3200,6 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 }
 
 %end
-
 %hook AWEIMFeedVideoQuickReplayInputViewController
 
 - (void)viewDidLayoutSubviews {
