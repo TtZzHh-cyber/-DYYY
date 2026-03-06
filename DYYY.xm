@@ -4402,19 +4402,43 @@ static NSHashTable *processedParentViews = nil;
         }
     }
 
-    // 只有当shareRecExtra不为空时才过滤点赞量低的视频和关键词
-    if ([self.referString isEqualToString:@"homepage_hot"]) {
-        NSInteger filterLowLikesThreshold = DYYYGetInteger(@"DYYYFilterLowLikes");
-        // 过滤低点赞量视频
-        if (filterLowLikesThreshold > 0) {
-            AWESearchAwemeExtraModel *searchExtraModel = [self searchExtraModel];
-            if (!searchExtraModel) {
-                AWEAwemeStatisticsModel *statistics = self.statistics;
-                if (statistics && statistics.diggCount) {
-                    shouldFilterLowLikes = statistics.diggCount.integerValue < filterLowLikesThreshold;
-                }
-            }
+%end
+
+
+// 推荐页低赞过滤
+%hook AWEHotListDataController
+
+- (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
+    NSArray *orig = %orig;
+    if (!orig || orig.count == 0) return orig;
+    
+    NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
+    if (threshold <= 0) return orig;
+    
+    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
+    for (id obj in orig) {
+        if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
+            [filtered addObject:obj];
+            continue;
         }
+        AWEAwemeModel *m = (AWEAwemeModel *)obj;
+        // 广告不管
+        if (m.isAds) {
+            [filtered addObject:obj];
+            continue;
+        }
+        // 拿点赞数
+        NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
+        if (!digg || digg.integerValue >= threshold) {
+            [filtered addObject:obj];
+        }
+    }
+    return filtered;
+}
+
+%end
+
+   
 
         // 过滤包含特定关键词的视频
         if (keywordsList.count > 0) {
@@ -4456,7 +4480,7 @@ static NSHashTable *processedParentViews = nil;
                 shouldFilterTime = (timeDifference > threshold);
             }
         }
-    }
+    
 
     // 检查是否为HDR视频
     if (filterHDR && self.video && self.video.bitrateModels) {
