@@ -3170,11 +3170,14 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     NSArray *orig = %orig;
     if (!orig || orig.count == 0) return orig;
 
+    // ⭐ 关键：只在推荐页初始化时执行
+    if (!arg2) return orig;
+
     // 插件开关
     NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
     if (threshold <= 0) return orig;
 
-    // 只处理视频 feed
+    // 确保是视频列表
     if (![orig.firstObject isKindOfClass:%c(AWEAwemeModel)]) {
         return orig;
     }
@@ -3190,7 +3193,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
         AWEAwemeModel *m = (AWEAwemeModel *)obj;
 
-        // 广告直接保留
+        // 广告保留
         if (m.isAds) {
             [filtered addObject:obj];
             continue;
@@ -3199,9 +3202,9 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
         NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
 
         // 低赞过滤
-        if (!digg || digg.integerValue >= threshold) {
-            [filtered addObject:obj];
-        }
+        if (digg && digg.integerValue < threshold) continue;
+
+        [filtered addObject:obj];
     }
 
     return filtered;
