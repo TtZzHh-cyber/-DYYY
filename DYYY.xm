@@ -3162,7 +3162,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
-// 推荐页低赞过滤
+// 推荐页低赞过滤（最终稳定版）
 %hook AWEHotListDataController
 
 - (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
@@ -3170,15 +3170,21 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     NSArray *orig = %orig;
     if (!orig || orig.count == 0) return orig;
 
-    // ⭐ 关键：只在推荐页初始化时执行
-    if (!arg2) return orig;
+    // 插件开关控制
+    if (!DYYYGetBool(@"DYYYFilterLowLikesEnable")) {
+        return orig;
+    }
 
-    // 插件开关
     NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
     if (threshold <= 0) return orig;
 
-    // 确保是视频列表
-    if (![orig.firstObject isKindOfClass:%c(AWEAwemeModel)]) {
+    // ✅ 精准判断推荐页
+    UIViewController *vc = [self valueForKey:@"viewController"];
+    NSString *vcName = NSStringFromClass([vc class]);
+
+    if (![vcName containsString:@"Recommend"] &&
+        ![vcName containsString:@"HotList"]) {
+        // 不是推荐页 → 不做过滤
         return orig;
     }
 
@@ -3186,6 +3192,7 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
     for (id obj in orig) {
 
+        // 排除非视频对象（广告、Banner等）
         if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
             [filtered addObject:obj];
             continue;
@@ -3193,18 +3200,23 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
         AWEAwemeModel *m = (AWEAwemeModel *)obj;
 
-        // 广告保留
+        // 排除广告视频
         if (m.isAds) {
             [filtered addObject:obj];
             continue;
         }
 
+        // 排除自己作品
+        if (m.author && m.author.isSelf) {
+            [filtered addObject:obj];
+            continue;
+        }
+
+        // 点赞数过滤
         NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
-
-        // 低赞过滤
-        if (digg && digg.integerValue < threshold) continue;
-
-        [filtered addObject:obj];
+        if (!digg || digg.integerValue >= threshold) {
+            [filtered addObject:obj];
+        }
     }
 
     return filtered;
