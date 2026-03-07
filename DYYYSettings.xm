@@ -53,10 +53,10 @@ static void DYYYRemoveRemoteConfigObserver(void) {
     return original;
 }
 
-- (void)dealloc {
-    DYYYRemoveRemoteConfigObserver();
+- (void)viewDidLoad {
     %orig;
 }
+
 %end
 
 // 隐藏掉天气Label
@@ -354,14 +354,6 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
               @"cellType" : @37,
               @"imageName" : @"ic_play_outlined_12"
           },
-          @{
-              @"identifier" : @"DYYYDisableCastVPNCheck",
-              @"title" : @"忽略投屏 VPN 检测",
-              @"subTitle" : @"开启后在连接 VPN 时也可以正常投屏",
-              @"detail" : @"",
-              @"cellType" : @37,
-              @"imageName" : @"ic_tv_outlined_20"
-          },
           @{@"identifier" : @"DYYYDefaultSpeed",
             @"title" : @"设置默认倍速",
             @"detail" : @"",
@@ -444,40 +436,6 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 [DYYYOptionsSelectionView showWithPreferenceKey:@"DYYYLongPressSpeed"
                                                    optionsArray:speedOptions
                                                      headerText:@"选择右侧长按倍速"
-                                                 onPresentingVC:topView()
-                                               selectionChanged:^(NSString *selectedValue) {
-                                                 item.detail = selectedValue;
-                                                 [item refreshCell];
-                                               }];
-              };
-          }
-
-          else if ([item.identifier isEqualToString:@"DYYYScheduleStyle"]) {
-              NSString *savedStyle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYScheduleStyle"];
-              item.detail = savedStyle ?: @"默认";
-              item.cellTappedBlock = ^{
-                NSArray *styleOptions = @[ @"进度条两侧上下", @"进度条左侧剩余", @"进度条左侧完整", @"进度条右侧剩余", @"进度条右侧完整" ];
-
-                [DYYYOptionsSelectionView showWithPreferenceKey:@"DYYYScheduleStyle"
-                                                   optionsArray:styleOptions
-                                                     headerText:@"选择进度时长样式"
-                                                 onPresentingVC:topView()
-                                               selectionChanged:^(NSString *selectedValue) {
-                                                 item.detail = selectedValue;
-                                                 [item refreshCell];
-                                               }];
-              };
-          }
-
-          else if ([item.identifier isEqualToString:@"DYYYLabelStyle"]) {
-              NSString *savedStyle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLabelStyle"];
-              item.detail = savedStyle ?: @"默认";
-              item.cellTappedBlock = ^{
-                NSArray *styleOptions = @[ @"文案标签显示", @"文案标签隐藏", @"文案标签禁止跳转搜索" ];
-
-                [DYYYOptionsSelectionView showWithPreferenceKey:@"DYYYLabelStyle"
-                                                   optionsArray:styleOptions
-                                                     headerText:@"选择文案标签样式"
                                                  onPresentingVC:topView()
                                                selectionChanged:^(NSString *selectedValue) {
                                                  item.detail = selectedValue;
@@ -1018,11 +976,6 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"detail" : @"",
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
-          @{@"identifier" : @"DYYYHidePadTabBarElements",
-            @"title" : @"精简平板底栏",
-            @"detail" : @"",
-            @"cellType" : @6,
-            @"imageName" : @"ic_eyeslash_outlined_16"},
           @{@"identifier" : @"DYYYHideTopBarBadge",
             @"title" : @"隐藏顶栏红点",
             @"detail" : @"",
@@ -1104,11 +1057,6 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"imageName" : @"ic_eyeslash_outlined_16"},
           @{@"identifier" : @"DYYYHideAvatarButton",
             @"title" : @"隐藏头像按钮",
-            @"detail" : @"",
-            @"cellType" : @6,
-            @"imageName" : @"ic_eyeslash_outlined_16"},
-          @{@"identifier" : @"DYYYHideAvatarRing",
-            @"title" : @"隐藏头像光圈",
             @"detail" : @"",
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
@@ -1316,7 +1264,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
           @{@"identifier" : @"DYYYHideGongChuang",
-            @"title" : @"屏蔽共创信息",
+            @"title" : @"隐藏共创头像",
             @"detail" : @"",
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
@@ -1341,13 +1289,14 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
           @{@"identifier" : @"DYYYHideAntiAddictedNotice",
-            @"title" : @"隐藏作者声明及风险提示",
+            @"title" : @"隐藏作者声明",
             @"detail" : @"",
             @"cellType" : @6,
             @"imageName" : @"ic_eyeslash_outlined_16"},
           @{
               @"identifier" : @"DYYYHideFeedAnchorContainer",
               @"title" : @"隐藏视频锚点",
+              @"subTitle" : @"包括昵称上方的拍摄同款、抖音精选、游戏、轻颜等供稿链接，不包括视频定位",
               @"detail" : @"",
               @"cellType" : @37,
               @"imageName" : @"ic_eyeslash_outlined_16"
@@ -1639,48 +1588,95 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       // 【长按面板】分类
       NSMutableArray<AWESettingItemModel *> *modernpanels = [NSMutableArray array];
       NSArray *modernpanelSettings = @[
-          @{
-              @"identifier" : @"DYYYSimplifyLongPressPanel",
-              @"title" : @"精简长按面板",
-              @"subTitle" : @"开启后将隐藏所有原始面板选项，只保留 DYYY 自定义功能",
-              @"detail" : @"",
-              @"cellType" : @37,
-              @"imageName" : @"ic_eyeslash_outlined_16"
-          },
-          @{
-              @"identifier" : @"DYYYHidePanelItems",
-              @"title" : @"隐藏面板项目",
-              @"subTitle" : @"输入要隐藏的按钮名称，多个用逗号分隔\n支持精确匹配和部分匹配，不区分大小写\n例如：举报,倍速,投屏,弹幕",
-              @"detail" : @"逗号分隔按钮名",
-              @"cellType" : @20,
-              @"imageName" : @"ic_eyeslash_outlined_16"
-          }
+          @{@"identifier" : @"DYYYHidePanelDaily",
+            @"title" : @"隐藏面板日常",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelRecommend",
+            @"title" : @"隐藏面板推荐",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelReport",
+            @"title" : @"隐藏面板举报",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelSpeed",
+            @"title" : @"隐藏面板倍速",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelClearScreen",
+            @"title" : @"隐藏面板清屏",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelFavorite",
+            @"title" : @"隐藏面板缓存",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelCast",
+            @"title" : @"隐藏面板投屏",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelSubtitle",
+            @"title" : @"隐藏面板弹幕",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelSearchImage",
+            @"title" : @"隐藏面板识图",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelListenDouyin",
+            @"title" : @"隐藏面板听抖音",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelOpenInPC",
+            @"title" : @"隐藏电脑Pad打开",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelLater",
+            @"title" : @"隐藏面板稍后再看",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelAutoPlay",
+            @"title" : @"隐藏面板自动连播",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelNotInterested",
+            @"title" : @"隐藏面板不感兴趣",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelBackgroundPlay",
+            @"title" : @"隐藏面板后台播放",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelTimerClose",
+            @"title" : @"隐藏面板定时关闭",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"},
+          @{@"identifier" : @"DYYYHidePanelBiserial",
+            @"title" : @"隐藏双列快捷入口",
+            @"detail" : @"",
+            @"cellType" : @6,
+            @"imageName" : @"ic_eyeslash_outlined_16"}
       ];
 
       for (NSDictionary *dict in modernpanelSettings) {
           AWESettingItemModel *item = [DYYYSettingsHelper createSettingItem:dict];
-
-          // 特殊处理隐藏面板项目选项（文本输入）
-          if ([item.identifier isEqualToString:@"DYYYHidePanelItems"]) {
-              NSString *savedItems = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYHidePanelItems"];
-              item.detail = savedItems.length > 0 ? savedItems : @"逗号分隔按钮名";
-
-              item.cellTappedBlock = ^{
-                if (!item.isEnable) return;
-                NSString *defaultText = [item.detail isEqualToString:@"逗号分隔按钮名"] ? @"" : item.detail;
-                [DYYYSettingsHelper showTextInputAlert:@"隐藏面板项目"
-                                           defaultText:defaultText
-                                           placeholder:@"例如：举报,倍速,投屏,弹幕"
-                                             onConfirm:^(NSString *text) {
-                                               NSString *trimmedText = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                                               [DYYYSettingsHelper setUserDefaults:trimmedText forKey:@"DYYYHidePanelItems"];
-                                               item.detail = trimmedText.length > 0 ? trimmedText : @"逗号分隔按钮名";
-                                               [item refreshCell];
-                                             }
-                                              onCancel:nil];
-              };
-          }
-
           [modernpanels addObject:item];
       }
 
@@ -2005,14 +2001,6 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
             @"cellType" : @37,
             @"imageName" : @"ic_emoji_outlined"
         },
-        @{
-            @"identifier" : DYYY_SAVE_COMMENT_AUDIO_KEY,
-            @"title" : @"保存评论区语音",
-            @"subTitle" : @"长按语音评论可下载并分享",
-            @"detail" : @"",
-            @"cellType" : @37,
-            @"imageName" : @"ic_audio_outlined"
-        },
           @{@"identifier" : @"DYYYForceDownloadPreviewEmotion",
             @"title" : @"保存预览页表情包",
             @"detail" : @"",
@@ -2059,7 +2047,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
           [downloadItems addObject:item];
       }
 
-      // 【ABTest】分类
+      // 【热更新】分类
       NSMutableArray<AWESettingItemModel *> *hotUpdateItems = [NSMutableArray array];
       NSArray *hotUpdateSettings = @[
           @{@"identifier" : @"DYYYABTestBlockEnabled",
@@ -2236,7 +2224,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 BOOL newValue = !item.isSwitchOn;
 
                 if (newValue) {
-                    [DYYYBottomAlertView showAlertWithTitle:@"禁止ABTest下发配置"
+                    [DYYYBottomAlertView showAlertWithTitle:@"禁止热更新下发配置"
                         message:@"这将暂停接收测试新功能的推送。确定要继续吗？"
                         avatarURL:nil
                         cancelButtonText:@"取消"
@@ -2255,7 +2243,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
                 } else {
                     item.isSwitchOn = newValue;
                     [DYYYSettingsHelper setUserDefaults:@(newValue) forKey:@"DYYYABTestBlockEnabled"];
-                    [DYYYUtils showToast:@"已允许ABTest下发配置，重启后生效。"];
+                    [DYYYUtils showToast:@"已允许热更新下发配置，重启后生效。"];
                 }
               };
           } else if ([item.identifier isEqualToString:@"DYYYABTestModeString"]) {
@@ -2874,7 +2862,7 @@ void showDYYYSettingsVC(UIViewController *rootVC, BOOL hasAgreed) {
       [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"长按面板设置" items:longPressItems]];
       [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"媒体保存" items:downloadItems]];
       [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"交互增强" items:interactionItems]];
-      [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"ABTest"
+      [sections addObject:[DYYYSettingsHelper createSectionWithTitle:@"热更新"
                                                          footerTitle:@"允许用户导出或导入抖音的ABTest配置。远程配置由 Nathalie 维护，在应用启动时自动更新远程配置。"
                                                                items:hotUpdateItems]];
       // 创建并推入二级设置页面
@@ -3536,13 +3524,16 @@ speedSettingsItem.detail = trimmedText;
       [DYYYSettingsHelper showAboutDialog:@"关于DYYY"
                                   message:@"版本: " DYYY_VERSION @"\n\n"
                                           @"感谢使用DYYY\n\n"
-                                          @"感谢huami开源\n\n"
-                                          @"@维他入我心 基于DYYY二次开发\n\n"
+                                          @"感谢@huami开源\n\n"
+                                          @"感谢@维他入我心 二次开发\n\n"
+                                          @"@cookieodd 维护更新\n\n"
                                           @"感谢huami group中群友的支持赞助\n\n"
                                           @"Telegram @huamidev\n\n"
                                           @"Telegram @vita_app\n\n"
+                                          @"Telegram @cookieodd\n\n"
                                           @"开源地址 huami1314/DYYY\n\n"
                                           @"仓库地址 Wtrwx/DYYY\n\n"
+                                          @"仓库地址 cookieodd/DYYY-ClassicEdition\n\n"
                                 onConfirm:nil];
     };
     [aboutItems addObject:aboutItem];
