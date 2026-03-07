@@ -130,7 +130,6 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @property(nonatomic, strong) AWELiveFollowFeedCellModel *cellRoom;
 @property(nonatomic, strong) NSString *videoFeedTag;
 @property(nonatomic, strong) id shareRecExtra;  // 推荐视频专有属性
-@property (nonatomic, copy) NSString *referString; // 推荐页为 homepage_hot
 @property(nonatomic, strong) NSArray<AWEAwemeTextExtraModel *> *textExtras;
 @property(nonatomic, copy) NSString *itemTitle;
 @property(nonatomic, copy) NSString *descriptionSimpleString;
@@ -154,7 +153,6 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface AWEABTestManager : NSObject
-+ (id)sharedManager;
 @property(retain, nonatomic) NSMutableDictionary *consistentABTestDic;
 @property(copy, nonatomic) NSDictionary *abTestData;
 @property(copy, nonatomic) NSDictionary *performanceReversalDic;
@@ -380,9 +378,6 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @interface AWETabBarSkinContainerView : UIView
 @end
 
-@interface AWETabBarElementContainerView : UIView
-@end
-
 @interface AWENormalModeTabBar : UIView
 @property(nonatomic, assign, readonly) UITabBarController *yy_viewController;
 @property(retain, nonatomic) AWETabBarSkinContainerView *skinContainerView;
@@ -556,14 +551,7 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 - (NSDictionary *)extraParams;
 @end
 
-@interface AWECommentAudioModel : NSObject
-@property (nonatomic, copy, readwrite) NSString *content;
-@end
-
 @interface AWECommentModel : NSObject
-@property (nonatomic, strong, readwrite) AWECommentAudioModel *audioModel;
-@property (nonatomic, strong, readwrite) AWEUserModel *author;
-@property (nonatomic, strong, readwrite) NSNumber *createTime;
 - (AWEIMStickerModel *)sticker;
 - (NSString *)content;
 - (NSArray<AWECommentImageModel *> *)imageList;
@@ -581,14 +569,15 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 - (AWECommentLongPressPanelContext *)commentPageContext;
 @end
 
-@interface AWECommentLongPressPanelSwiftImpl_CommentLongPressPanelReportElement : NSObject
-- (AWECommentLongPressPanelContext *)commentPageContext;
-- (BOOL)elementShouldShow;
-- (id)elementContent;
-- (id)elementImage;
+@protocol AWEFeedProgressSliderProtocol <NSObject>
+@property (nonatomic, assign) float value;
+@property (nonatomic, assign) float minimumValue;
+@property (nonatomic, assign) float maximumValue;
 @end
 
-@interface AWEFeedProgressSlider : UIView
+@interface AWEFeedProgressSlider : UIView <AWEFeedProgressSliderProtocol>
+@property(nonatomic, assign) float value;
+@property(nonatomic, assign) float minimumValue;
 @property(nonatomic, assign) float maximumValue;
 @property(nonatomic, strong) UIView *leftLabelUI;
 @property(nonatomic, strong) UIView *rightLabelUI;
@@ -1435,106 +1424,4 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 @end
 
 @interface TTPlayerView : UIView
-@end
-
-// 开屏广告
-@interface BDASplashManager : NSObject
-- (void)showSplashControllerViewOnKeyWindow:(id)keyWindow model:(id)model;
-- (void)splashViewShowFinished;
-@end
-
-// 投屏 VPN 检测
-@interface BDByteCastUtils : NSObject
-+ (BOOL)netVPNStatus;
-@end
-
-@interface BDByteCastNetUtilities : NSObject
-- (BOOL)getVPNStatus;
-@end
-
-@interface BDByteCastMonitorManager : NSObject
-- (BOOL)netVPNStatus;
-- (void)setNetVPNStatus:(BOOL)netVPNStatus;
-@end
-
-@interface BDByteCastEnvInfo : NSObject
-- (BOOL)isVPNActive;
-- (void)setIsVPNActive:(BOOL)isVPNActive;
-@end
-
-@interface BDByteScreenCastContext : NSObject
-- (BOOL)isVPNActive;
-- (void)setIsVPNActive:(BOOL)isVPNActive;
-@end
-
-@interface AWEDPlayerProgressContainerView : UIView
-@end
-// 低赞杀手头文件
-// @cookieodd
-
-#import <UIKit/UIKit.h>
-#import <Foundation/Foundation.h>
-
-// 视频统计模型
-@interface AWEAwemeStatisticsModel : NSObject
-@property (nonatomic, strong) NSNumber *diggCount;
-@end
-
-// 直播模型
-@interface AWELiveFollowFeedCellModel : NSObject
-@end
-
-// 用户模型
-@interface AWEUserModel : NSObject
-@property (nonatomic, copy) NSString *nickname;
-@property (nonatomic, copy) NSString *shortID;
-@end
-
-// 视频模型
-@interface AWEAwemeModel : NSObject
-@property (nonatomic, strong) AWEAwemeStatisticsModel *statistics;
-@property (nonatomic, assign) BOOL isAds;
-@property (nonatomic, copy) NSString *descriptionString;
-@property (nonatomic, strong) id hotSpotLynxCardModel;
-@property (nonatomic, strong) AWELiveFollowFeedCellModel *cellRoom;
-@property (nonatomic, strong) AWEUserModel *author;
-@end
-
-// 推荐页数据控制器
-@interface AWEListDataController : NSObject
-@property (nonatomic, strong) NSMutableArray *dataSource;
-@end
-
-@interface AWEHotListDataController : AWEListDataController
-- (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2;
-@end
-
-// 设置项模型
-@interface AWESettingItemModel : NSObject
-@property (nonatomic, copy) NSString *identifier;
-@property (nonatomic, copy) NSString *title;
-@property (nonatomic, copy) NSString *detail;
-@property (nonatomic, copy) NSString *svgIconImageName;
-@property (nonatomic, assign) NSInteger cellType;
-@property (nonatomic, assign) NSInteger colorStyle;
-@property (nonatomic, assign) BOOL isEnable;
-@property (nonatomic, copy) void (^cellTappedBlock)(void);
-- (void)refreshCell;
-@end
-
-// 设置分区模型
-@interface AWESettingSectionModel : NSObject
-@property (nonatomic, assign) NSInteger type;
-@property (nonatomic, assign) CGFloat sectionHeaderHeight;
-@property (nonatomic, copy) NSString *sectionHeaderTitle;
-@property (nonatomic, strong) NSArray *itemArray;
-@end
-
-// 设置ViewModel
-@interface AWESettingBaseViewModel : NSObject
-@property (nonatomic, weak) id controllerDelegate;
-@property (nonatomic, strong) NSArray *sectionDataArray;
-@end
-
-@interface AWESettingsViewModel : AWESettingBaseViewModel
 @end
