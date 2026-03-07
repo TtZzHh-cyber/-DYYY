@@ -12,7 +12,6 @@
 #import <objc/runtime.h>
 
 #import "AwemeHeaders.h"
-#import "CityManager.h"
 #import "DYYYBottomAlertView.h"
 #import "DYYYManager.h"
 
@@ -28,6 +27,9 @@ static CGFloat gStartY = 0.0;
 static CGFloat gStartVal = 0.0;
 static DYEdgeMode gMode = DYEdgeModeNone;
 static __weak UICollectionView *gFeedCV = nil;
+
+// 进度条位置
+static CGFloat gProgressContainerY = 0.0;
 
 static const CGFloat kInvalidAlpha = -1.0;
 static const CGFloat kInvalidHeight = -1.0;
@@ -939,6 +941,9 @@ static BOOL DYYYShouldHandleSpeedFeatures(void) {
 %hook AWEPlayInteractionProgressContainerView
 - (void)layoutSubviews {
     %orig;
+    
+    // 保存位置
+    gProgressContainerY = self.frame.origin.y;
 
     if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
         return;
@@ -964,124 +969,294 @@ static BOOL DYYYShouldHandleSpeedFeatures(void) {
 
 %end
 
+// Keeps the forced progress overlay visible without hijacking feed gestures.
+static inline void DYYYUpdateProgressOverlayInteractivity(AWEFeedProgressSlider *slider, BOOL allowInteraction) {
+    if (!slider) {
+        return;
+    }
+
+    if (slider.userInteractionEnabled != allowInteraction) {
+        slider.userInteractionEnabled = allowInteraction;
+    }
+
+    UIView *parentView = slider.superview;
+    if (parentView && parentView.userInteractionEnabled != allowInteraction) {
+        parentView.userInteractionEnabled = allowInteraction;
+    }
+
+    UIView *controllerView = (UIView *)slider.progressSliderDelegate;
+    if ([controllerView isKindOfClass:%c(AWEPlayInteractionProgressController)] && controllerView.userInteractionEnabled != allowInteraction) {
+        controllerView.userInteractionEnabled = allowInteraction;
+    }
+}
+
+// ==================== 进度条时间显示功能 ====================
+// 复刻自 AWEProgressBar 项目
+// 作者: @cookieodd
+
+// 关联键
+static char kLeftLabelKey;
+static char kRightLabelKey;
+
+// 布局常量
+static const CGFloat kLabelWidth = 28.0;
+static const CGFloat kLabelH = 12.0;
+static const CGFloat kSliderYOffset = 2.0;
+static const CGFloat kLabelYOffset = -5.0;  // 标签偏移
+
+// 动态布局
+static inline CGFloat DYYYGetSliderX(UIView *parent) {
+    return parent ? parent.bounds.size.width * 0.1 : 39.0;
+}
+static inline CGFloat DYYYGetSliderWidth(UIView *parent) {
+    return parent ? parent.bounds.size.width * 0.795 : 310.0;
+}
+static inline CGFloat DYYYGetRightLabelX(UIView *parent) {
+    return DYYYGetSliderX(parent) + DYYYGetSliderWidth(parent) + 3.0;
+}
+static inline CGFloat DYYYGetLeftInset(UIView *parent) {
+    return parent ? parent.bounds.size.width * 0.02 : 8.0;
+}
+
+// 时间格式化
+static NSString *dyyy_formatTime(CGFloat seconds) {
+    NSInteger s = (NSInteger)seconds;
+    if (s < 0) s = 0;
+    NSInteger hrs = s / 3600;
+    NSInteger mins = (s % 3600) / 60;
+    NSInteger secs = s % 60;
+    if (hrs > 0)
+        return [NSString stringWithFormat:@"%02ld:%02ld:%02ld", (long)hrs, (long)mins, (long)secs];
+    return [NSString stringWithFormat:@"%02ld:%02ld", (long)mins, (long)secs];
+}
+
+// 标签辅助
+static UILabel *DYYYEnsureLabel(AWEFeedProgressSlider *slider, BOOL isLeft) {
+    if (!slider || !slider.superview) return nil;
+    void *key = isLeft ? &kLeftLabelKey : &kRightLabelKey;
+    UILabel *label = objc_getAssociatedObject(slider, key);
+    if (!label) {
+        label = [[UILabel alloc] init];
+        label.backgroundColor = [UIColor clearColor];
+        label.textColor = [UIColor whiteColor];
+        label.font = [UIFont monospacedDigitSystemFontOfSize:8 weight:UIFontWeightMedium];
+        label.textAlignment = isLeft ? NSTextAlignmentRight : NSTextAlignmentLeft;
+        label.text = @"00:00";
+        label.layer.zPosition = 999;  // 置顶
+        objc_setAssociatedObject(slider, key, label, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    UIView *parent = slider.superview;
+    if (label.superview != parent) {
+        [label removeFromSuperview];
+        [parent addSubview:label];
+    }
+    label.hidden = NO;
+    return label;
+}
+
+static void DYYYLayoutLabels(AWEFeedProgressSlider *slider) {
+    if (!DYYYGetBool(@"DYYYShowScheduleDisplay")) return;
+    UILabel *left = objc_getAssociatedObject(slider, &kLeftLabelKey);
+    UILabel *right = objc_getAssociatedObject(slider, &kRightLabelKey);
+    if (!left && !right) return;
+    
+    UIView *parent = slider.superview;
+    CGFloat sliderY = slider.frame.origin.y;
+    CGFloat labelY = sliderY + kLabelYOffset;
+    
+    if (left) left.frame = CGRectMake(DYYYGetLeftInset(parent), labelY, kLabelWidth, kLabelH);
+    if (right) right.frame = CGRectMake(DYYYGetRightLabelX(parent), labelY, kLabelWidth, kLabelH);
+}
+
+static void DYYYAdjustSliderFrame(AWEFeedProgressSlider *slider) {
+    if (!DYYYGetBool(@"DYYYShowScheduleDisplay")) return;
+    if (!slider.superview) return;
+    UIView *parent = slider.superview;
+    CGFloat sliderX = DYYYGetSliderX(parent);
+    CGFloat sliderW = DYYYGetSliderWidth(parent);
+    CGRect f = slider.frame;
+    if (fabs(f.origin.x - sliderX) > 0.5 || fabs(f.size.width - sliderW) > 0.5) {
+        f.origin.x = sliderX;
+        f.size.width = sliderW;
+        slider.frame = f;
+    }
+}
+
+static void dyyy_updateTimeLabel(UILabel *label, CGFloat seconds) {
+    if (!label) return;
+    NSString *t = dyyy_formatTime(seconds);
+    if (![label.text isEqualToString:t]) label.text = t;
+}
+
+static void dyyy_updateLabels(AWEPlayInteractionProgressController *ctrl, double curTime, double totalDur) {
+    if (!DYYYGetBool(@"DYYYShowScheduleDisplay")) return;
+    AWEFeedProgressSlider *slider = ctrl.progressSlider;
+    if (!slider) return;
+    UILabel *left = DYYYEnsureLabel(slider, YES);
+    UILabel *right = DYYYEnsureLabel(slider, NO);
+    dyyy_updateTimeLabel(left, curTime);
+    dyyy_updateTimeLabel(right, totalDur);
+    if (totalDur > 0) {
+        // 保存总时长
+        objc_setAssociatedObject(slider, @selector(setValue:), @(totalDur), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    DYYYLayoutLabels(slider);
+}
+
+// 禁止变粗（默认开启）
+%hook AWEDProgressStateChangeContainer
+- (void)updateProgressSliderToStrongState {}
+- (BOOL)isProgressSliderStrongState { return NO; }
+- (void)setIsProgressSliderStrongState:(BOOL)arg1 {}
+%end
+
+%hook AWEDProgressOthersContainer
+- (void)updateProgressSliderStateToStrongIfNeeded {}
+- (BOOL)needSliderStrongState { return NO; }
+- (void)setNeedSliderStrongState:(BOOL)arg1 {}
+%end
+
+// 进度条显示
 %hook AWEFeedProgressSlider
 
 - (void)setAlpha:(CGFloat)alpha {
-    if (DYYYGetBool(@"DYYYShowScheduleDisplay")) {
-        if (DYYYGetBool(@"DYYYHideVideoProgress")) {
-            %orig(0);
-        } else {
-            %orig(1.0);
-        }
+    BOOL hideVideoProgress = DYYYGetBool(@"DYYYHideVideoProgress");
+    
+    if (hideVideoProgress) {
+        %orig(0.0f);
+        if (!self.hidden) self.hidden = YES;
     } else {
-        %orig;
+        %orig(1.0f);
+        if (self.hidden) self.hidden = NO;
+    }
+    
+    BOOL allowInteraction = !hideVideoProgress && alpha > 0.05f;
+    DYYYUpdateProgressOverlayInteractivity(self, allowInteraction);
+}
+
+- (void)updateSliderFrame:(struct CGRect)arg1 height:(double)arg2 originY:(double)arg3
+    minColor:(id)arg4 maxColor:(id)arg5 thumb:(id)arg6 thumbSize:(struct CGRect)arg7 {}
+
+- (void)didMoveToSuperview {
+    %orig;
+    if (self.superview && DYYYGetBool(@"DYYYShowScheduleDisplay")) {
+        DYYYEnsureLabel(self, YES);
+        DYYYEnsureLabel(self, NO);
+        DYYYAdjustSliderFrame(self);
+        DYYYLayoutLabels(self);
     }
 }
 
-static CGFloat leftLabelLeftMargin = -1;
-static CGFloat rightLabelRightMargin = -1;
+- (void)layoutSubviews {
+    @try { [self setValue:@(1.0) forKey:@"_currentHeight"]; } @catch (NSException *e) {}
+    %orig;
+    DYYYAdjustSliderFrame(self);
+    DYYYLayoutLabels(self);
+}
+
+- (void)setFrame:(CGRect)frame {
+    if (DYYYGetBool(@"DYYYShowScheduleDisplay")) {
+        if (self.superview) {
+            UIView *parent = self.superview;
+            frame.origin.x = DYYYGetSliderX(parent);
+            frame.size.width = DYYYGetSliderWidth(parent);
+            frame.origin.y -= kSliderYOffset;
+        }
+    }
+    %orig(frame);
+    DYYYLayoutLabels(self);
+}
+
+- (void)setValue:(float)value {
+    %orig;
+    if (DYYYGetBool(@"DYYYShowScheduleDisplay")) {
+        UILabel *left = objc_getAssociatedObject(self, &kLeftLabelKey);
+        if (left && self.maximumValue > 0) {
+            NSNumber *totalDur = objc_getAssociatedObject(self, @selector(setValue:));
+            if (totalDur && [totalDur doubleValue] > 0) {
+                CGFloat cur = (value / self.maximumValue) * [totalDur doubleValue];
+                dyyy_updateTimeLabel(left, cur);
+            }
+        }
+    }
+}
 
 - (void)setLimitUpperActionArea:(BOOL)arg1 {
     %orig;
+    DYYYLayoutLabels(self);
+}
 
-    NSString *durationFormatted = [self.progressSliderDelegate formatTimeFromSeconds:floor(self.progressSliderDelegate.model.videoDuration / 1000)];
+%end
+
+// 放大进度条
+%hook AWEFakeProgressSliderView
+
+- (void)setFrame:(CGRect)frame {
     if (DYYYGetBool(@"DYYYShowScheduleDisplay")) {
-        UIView *parentView = self.superview;
-        if (!parentView)
-            return;
+        UIView *parent = self.superview;
+        frame.origin.x = DYYYGetSliderX(parent);
+        frame.size.width = DYYYGetSliderWidth(parent);
+    }
+    %orig(frame);
+}
 
-        [[parentView viewWithTag:10001] removeFromSuperview];
-        [[parentView viewWithTag:10002] removeFromSuperview];
-
-        CGRect sliderOriginalFrameInParent = [self convertRect:self.bounds toView:parentView];
-        CGRect sliderFrame = self.frame;
-
-        CGFloat verticalOffset = -12.5;
-        NSString *offsetValueString = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYTimelineVerticalPosition"];
-        if (offsetValueString.length > 0) {
-            CGFloat configOffset = [offsetValueString floatValue];
-            if (configOffset != 0)
-                verticalOffset = configOffset;
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYShowScheduleDisplay")) {
+        UIView *parent = self.superview;
+        CGFloat sliderX = DYYYGetSliderX(parent);
+        CGFloat sliderW = DYYYGetSliderWidth(parent);
+        CGRect f = self.frame;
+        if (fabs(f.origin.x - sliderX) > 0.5 || fabs(f.size.width - sliderW) > 0.5) {
+            f.origin.x = sliderX;
+            f.size.width = sliderW;
+            self.frame = f;
         }
-
-        NSString *scheduleStyle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYScheduleStyle"];
-        BOOL showRemainingTime = [scheduleStyle isEqualToString:@"进度条右侧剩余"];
-        BOOL showCompleteTime = [scheduleStyle isEqualToString:@"进度条右侧完整"];
-        BOOL showLeftRemainingTime = [scheduleStyle isEqualToString:@"进度条左侧剩余"];
-        BOOL showLeftCompleteTime = [scheduleStyle isEqualToString:@"进度条左侧完整"];
-
-        NSString *labelColorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYProgressLabelColor"];
-
-        CGFloat labelYPosition = sliderOriginalFrameInParent.origin.y + verticalOffset;
-        CGFloat labelHeight = 15.0;
-        UIFont *labelFont = [UIFont systemFontOfSize:8];
-
-        if (!showRemainingTime && !showCompleteTime) {
-            UILabel *leftLabel = [[UILabel alloc] init];
-            leftLabel.backgroundColor = [UIColor clearColor];
-            leftLabel.font = labelFont;
-            leftLabel.tag = 10001;
-            if (showLeftRemainingTime)
-                leftLabel.text = @"00:00";
-            else if (showLeftCompleteTime)
-                leftLabel.text = [NSString stringWithFormat:@"00:00/%@", durationFormatted];
-            else
-                leftLabel.text = @"00:00";
-
-            [leftLabel sizeToFit];
-
-            if (leftLabelLeftMargin == -1) {
-                leftLabelLeftMargin = sliderFrame.origin.x;
-            }
-
-            leftLabel.frame = CGRectMake(leftLabelLeftMargin, labelYPosition, leftLabel.frame.size.width, labelHeight);
-            [parentView addSubview:leftLabel];
-
-            [DYYYUtils applyColorSettingsToLabel:leftLabel colorHexString:labelColorHex];
-        }
-
-        if (!showLeftRemainingTime && !showLeftCompleteTime) {
-            UILabel *rightLabel = [[UILabel alloc] init];
-            rightLabel.backgroundColor = [UIColor clearColor];
-            rightLabel.font = labelFont;
-            rightLabel.tag = 10002;
-            if (showRemainingTime)
-                rightLabel.text = @"00:00";
-            else if (showCompleteTime)
-                rightLabel.text = [NSString stringWithFormat:@"00:00/%@", durationFormatted];
-            else
-                rightLabel.text = durationFormatted;
-
-            [rightLabel sizeToFit];
-
-            if (rightLabelRightMargin == -1) {
-                rightLabelRightMargin = sliderFrame.origin.x + sliderFrame.size.width - rightLabel.frame.size.width;
-            }
-
-            rightLabel.frame = CGRectMake(rightLabelRightMargin, labelYPosition, rightLabel.frame.size.width, labelHeight);
-            [parentView addSubview:rightLabel];
-
-            [DYYYUtils applyColorSettingsToLabel:rightLabel colorHexString:labelColorHex];
-        }
-
-        [self setNeedsLayout];
-    } else {
-        UIView *parentView = self.superview;
-        if (parentView) {
-            [[parentView viewWithTag:10001] removeFromSuperview];
-            [[parentView viewWithTag:10002] removeFromSuperview];
-        }
-        [self setNeedsLayout];
     }
 }
 
-- (void)setHidden:(BOOL)hidden {
+%end
+
+// 进度时间和去除黑线
+%hook AWEPlayInteractionProgressController
+
+- (UIView *)progressSliderUnderView {
+    UIView *v = %orig;
+    // 去除黑线（默认开启）
+    v.hidden = YES;
+    v.alpha = 0;
+    return v;
+}
+
+- (void)setPlayProgressWithTime:(double)arg1 totalDuration:(double)arg2 {
     %orig;
-    BOOL hideVideoProgress = DYYYGetBool(@"DYYYHideVideoProgress");
-    BOOL showScheduleDisplay = DYYYGetBool(@"DYYYShowScheduleDisplay");
-    if (hideVideoProgress && showScheduleDisplay && !hidden) {
-        self.alpha = 0;
+    dyyy_updateLabels(self, arg1, arg2);
+}
+
+- (void)updateProgressSliderWithTime:(double)arg1 totalDuration:(double)arg2 {
+    %orig;
+    dyyy_updateLabels(self, arg1, arg2);
+}
+
+- (void)progressSliderTouchBegan:(id)arg1 {
+    %orig;
+}
+
+- (void)progressSliderValueChanged:(id)arg1 {
+    %orig;
+    if (DYYYGetBool(@"DYYYShowScheduleDisplay")) {
+        AWEFeedProgressSlider *slider = self.progressSlider;
+        if (!slider) return;
+        UILabel *left = objc_getAssociatedObject(slider, &kLeftLabelKey);
+        if (left && slider.maximumValue > 0) {
+            CGFloat cur = (slider.value / slider.maximumValue) * (self.model.videoDuration / 1000.0);
+            dyyy_updateTimeLabel(left, cur);
+        }
     }
+}
+
+- (void)progressSliderTouchEnded:(id)arg1 {
+    %orig;
 }
 
 %end
@@ -1090,158 +1265,27 @@ static CGFloat rightLabelRightMargin = -1;
 
 - (id)timestampLabel {
     UILabel *label = %orig;
-    BOOL isEnableArea = DYYYGetBool(@"DYYYEnableArea");
-    if (!isEnableArea) {
-        return label;
-    }
-
     NSString *labelColorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYLabelColor"];
     if (DYYYGetBool(@"DYYYEnableRandomGradient")) {
         labelColorHex = @"random_gradient";
     }
-
-    BOOL boldEnabled = DYYYGetBool(@"DYYYBoldTimestamp");
-    if (boldEnabled && label.font) {
-        UIFont *boldFont = [UIFont boldSystemFontOfSize:label.font.pointSize];
-        label.font = boldFont;
+    if (DYYYGetBool(@"DYYYEnableArea")) {
+        [DYYYUtils processAndApplyIPLocationToLabel:label forModel:self.model withLabelColor:labelColorHex];
     }
-
-    NSString *cityCode = self.model.cityCode;
-    NSString *regionCode = nil;
-    if ([self.model respondsToSelector:@selector(region)]) {
-        regionCode = [self.model performSelector:@selector(region)];
-    }
-
-    if (cityCode && ([cityCode isEqualToString:@"0"] || [cityCode integerValue] == 0)) {
-        cityCode = nil;
-    }
-
-    static NSCache *locationCache;
-    static NSMutableSet *inFlight;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        locationCache = [[NSCache alloc] init];
-        locationCache.countLimit = 100;
-        inFlight = [[NSMutableSet alloc] init];
-    });
-
-    void (^updateLabelWithLocation)(UILabel *, NSString *) = ^(UILabel *lbl, NSString *location) {
-        if (location.length == 0) return;
-
-        NSString *currentText = lbl.text ?: @"";
-        if ([currentText containsString:location]) return;
-
-        if ([currentText containsString:@"IP属地："]) {
-            NSRange range = [currentText rangeOfString:@"IP属地："];
-            NSString *baseText = [currentText substringToIndex:range.location];
-            lbl.text = [NSString stringWithFormat:@"%@IP属地：%@", baseText, location];
-        } else if (currentText.length > 0) {
-            lbl.text = [NSString stringWithFormat:@"%@  IP属地：%@", currentText, location];
-        }
-
-        [DYYYUtils applyColorSettingsToLabel:lbl colorHexString:labelColorHex];
-    };
-
-    if (cityCode.length == 0 && regionCode.length == 0) {
-        updateLabelWithLocation(label, @"未知地区");
-        return label;
-    }
-
-    NSString *cacheKey = cityCode.length > 0 ? cityCode : regionCode;
-
-    NSString *cachedLocation = [locationCache objectForKey:cacheKey];
-    if (cachedLocation) {
-        updateLabelWithLocation(label, cachedLocation);
-
-        NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
-        if (ipScaleValue.length > 0) {
-            UIFont *originalFont = label.font;
-            CGFloat offset = DYYYGetFloat(@"DYYYIPLabelVerticalOffset");
-            if (offset > 0) {
-                label.transform = CGAffineTransformMakeTranslation(0, -offset);
-            } else {
-                label.transform = CGAffineTransformMakeTranslation(0, -3);
-            }
-            label.font = originalFont;
-        }
-        return label;
-    }
-
-    NSString *displayLocation = nil;
-
-    if (cityCode.length > 0) {
-        displayLocation = [CityManager.sharedInstance getCityNameWithCode:cityCode];
-
-        if (!displayLocation && regionCode.length > 0) {
-            displayLocation = [CityManager.sharedInstance getCountryNameWithCode:regionCode];
-        }
-
-        if (!displayLocation) {
-            @synchronized(inFlight) {
-                if ([inFlight containsObject:cityCode]) {
-                    return label;
-                }
-                [inFlight addObject:cityCode];
-            }
-
-            [CityManager fetchLocationWithGeonameId:cityCode completionHandler:^(NSDictionary *locationInfo, NSError *error) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    @synchronized(inFlight) {
-                        [inFlight removeObject:cityCode];
-                    }
-
-                    NSString *apiLocation = nil;
-
-                    if (!error && locationInfo) {
-                        NSString *cityName = locationInfo[@"adminName1"];
-                        NSString *countryName = locationInfo[@"countryName"];
-
-                        if (cityName && countryName) {
-                            if ([cityName isEqualToString:countryName]) {
-                                apiLocation = countryName;
-                            } else {
-                                apiLocation = [NSString stringWithFormat:@"%@ %@", countryName, cityName];
-                            }
-                        } else if (countryName) {
-                            apiLocation = countryName;
-                        } else if (cityName) {
-                            apiLocation = cityName;
-                        }
-                    }
-
-                    if (apiLocation) {
-                        [locationCache setObject:apiLocation forKey:cacheKey];
-                        updateLabelWithLocation(label, apiLocation);
-                    }
-                });
-            }];
-
-            return label;
-        }
-    }
-
-    if (!displayLocation && !cityCode && regionCode.length > 0) {
-        displayLocation = [CityManager.sharedInstance getCountryNameWithCode:regionCode];
-    }
-
-    if (!displayLocation) {
-        displayLocation = @"未知地区";
-        updateLabelWithLocation(label, displayLocation);
-        return label;
-    }
-
-    [locationCache setObject:displayLocation forKey:cacheKey];
-    updateLabelWithLocation(label, displayLocation);
-
+    // IP属地上移
     NSString *ipScaleValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYNicknameScale"];
     if (ipScaleValue.length > 0) {
         UIFont *originalFont = label.font;
+        CGRect originalFrame = label.frame;
         CGFloat offset = DYYYGetFloat(@"DYYYIPLabelVerticalOffset");
         if (offset > 0) {
-            label.transform = CGAffineTransformMakeTranslation(0, -offset);
+            CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, -offset);
+            label.transform = translationTransform;
         } else {
-            label.transform = CGAffineTransformMakeTranslation(0, -3);
+            CGAffineTransform translationTransform = CGAffineTransformMakeTranslation(0, -3);
+            label.transform = translationTransform;
         }
+
         label.font = originalFont;
     }
     return label;
@@ -1249,93 +1293,6 @@ static CGFloat rightLabelRightMargin = -1;
 
 + (BOOL)shouldActiveWithData:(id)arg1 context:(id)arg2 {
     return DYYYGetBool(@"DYYYEnableArea");
-}
-
-%end
-
-%hook AWEPlayInteractionProgressController
-
-%new
-- (NSString *)formatTimeFromSeconds:(CGFloat)seconds {
-    NSInteger hours = (NSInteger)seconds / 3600;
-    NSInteger minutes = ((NSInteger)seconds % 3600) / 60;
-    NSInteger secs = (NSInteger)seconds % 60;
-
-    if (hours > 0) {
-        return [NSString stringWithFormat:@"%02ld:%02ld:%02ld", (long)hours, (long)minutes, (long)secs];
-    } else {
-        return [NSString stringWithFormat:@"%02ld:%02ld", (long)minutes, (long)secs];
-    }
-}
-
-- (void)updateProgressSliderWithTime:(CGFloat)arg1 totalDuration:(CGFloat)arg2 {
-    %orig;
-
-    if (DYYYGetBool(@"DYYYShowScheduleDisplay")) {
-        AWEFeedProgressSlider *progressSlider = self.progressSlider;
-        UIView *parentView = progressSlider.superview;
-        if (!parentView)
-            return;
-
-        UILabel *leftLabel = [parentView viewWithTag:10001];
-        UILabel *rightLabel = [parentView viewWithTag:10002];
-
-        NSString *labelColorHex = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYProgressLabelColor"];
-
-        NSString *scheduleStyle = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYScheduleStyle"];
-        BOOL showRemainingTime = [scheduleStyle isEqualToString:@"进度条右侧剩余"];
-        BOOL showCompleteTime = [scheduleStyle isEqualToString:@"进度条右侧完整"];
-        BOOL showLeftRemainingTime = [scheduleStyle isEqualToString:@"进度条左侧剩余"];
-        BOOL showLeftCompleteTime = [scheduleStyle isEqualToString:@"进度条左侧完整"];
-
-        // 更新左标签
-        if (arg1 >= 0 && leftLabel) {
-            NSString *newLeftText = @"";
-            if (showLeftRemainingTime) {
-                CGFloat remainingTime = arg2 - arg1;
-                if (remainingTime < 0)
-                    remainingTime = 0;
-                newLeftText = [self formatTimeFromSeconds:remainingTime];
-            } else if (showLeftCompleteTime) {
-                newLeftText = [NSString stringWithFormat:@"%@/%@", [self formatTimeFromSeconds:arg1], [self formatTimeFromSeconds:arg2]];
-            } else {
-                newLeftText = [self formatTimeFromSeconds:arg1];
-            }
-
-            if (![leftLabel.text isEqualToString:newLeftText]) {
-                leftLabel.text = newLeftText;
-                [leftLabel sizeToFit];
-                CGRect leftFrame = leftLabel.frame;
-                leftFrame.size.height = 15.0;
-                leftLabel.frame = leftFrame;
-            }
-            [DYYYUtils applyColorSettingsToLabel:leftLabel colorHexString:labelColorHex];
-        }
-
-        // 更新右标签
-        if (arg2 > 0 && rightLabel) {
-            NSString *newRightText = @"";
-            if (showRemainingTime) {
-                CGFloat remainingTime = arg2 - arg1;
-                if (remainingTime < 0)
-                    remainingTime = 0;
-                newRightText = [self formatTimeFromSeconds:remainingTime];
-            } else if (showCompleteTime) {
-                newRightText = [NSString stringWithFormat:@"%@/%@", [self formatTimeFromSeconds:arg1], [self formatTimeFromSeconds:arg2]];
-            } else {
-                newRightText = [self formatTimeFromSeconds:arg2];
-            }
-
-            if (![rightLabel.text isEqualToString:newRightText]) {
-                rightLabel.text = newRightText;
-                [rightLabel sizeToFit];
-                CGRect rightFrame = rightLabel.frame;
-                rightFrame.size.height = 15.0;
-                rightLabel.frame = rightFrame;
-            }
-            [DYYYUtils applyColorSettingsToLabel:rightLabel colorHexString:labelColorHex];
-        }
-    }
 }
 
 %end
@@ -1793,86 +1750,6 @@ static NSString *const kDYYYLongPressCopyEnabledKey = @"DYYYLongPressCopyTextEna
         return;
     }
     %orig;
-}
-
-%end
-
-// 投屏忽略 VPN 检测
-%hook BDByteCastUtils
-
-+ (BOOL)netVPNStatus {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        return NO;
-    }
-    return %orig;
-}
-
-%end
-
-%hook BDByteCastNetUtilities
-
-- (BOOL)getVPNStatus {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        return NO;
-    }
-    return %orig;
-}
-
-%end
-
-%hook BDByteCastMonitorManager
-
-- (BOOL)netVPNStatus {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        return NO;
-    }
-    return %orig;
-}
-
-- (void)setNetVPNStatus:(BOOL)netVPNStatus {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        %orig(NO);
-        return;
-    }
-    %orig(netVPNStatus);
-}
-
-%end
-
-%hook BDByteCastEnvInfo
-
-- (BOOL)isVPNActive {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        return NO;
-    }
-    return %orig;
-}
-
-- (void)setIsVPNActive:(BOOL)isVPNActive {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        %orig(NO);
-        return;
-    }
-    %orig(isVPNActive);
-}
-
-%end
-
-%hook BDByteScreenCastContext
-
-- (BOOL)isVPNActive {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        return NO;
-    }
-    return %orig;
-}
-
-- (void)setIsVPNActive:(BOOL)isVPNActive {
-    if (DYYYGetBool(@"DYYYDisableCastVPNCheck")) {
-        %orig(NO);
-        return;
-    }
-    %orig(isVPNActive);
 }
 
 %end
@@ -2710,6 +2587,16 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 }
 %end
 
+// 移除共创头像列表
+%hook AWEPlayInteractionCoCreatorNewInfoView
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideGongChuang")) {
+        [self removeFromSuperview];
+        return;
+    }
+    %orig;
+}
+%end
 
 // 隐藏右下音乐和取消静音按钮
 %hook AFDCancelMuteAwemeView
@@ -2890,7 +2777,42 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
+%hook ACCGestureResponsibleStickerView
 
+- (void)layoutSubviews {
+    %orig;
+
+    if (DYYYGetBool(@"DYYYHideEditTags")) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:NSClassFromString(@"ACCEditTagStickerView")]) {
+                self.hidden = YES;
+                return;
+            }
+        }
+    }
+
+    if (DYYYGetBool(@"DYYYHideChallengeStickers")) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:NSClassFromString(@"ACCMordernQuickFlashStickerView")]) {
+                self.hidden = YES;
+                return;
+            }
+        }
+    }
+}
+
+%end
+
+// 去除"我的"加入挑战横幅
+%hook AWEPostWorkViewController
+- (BOOL)isDouGuideTipViewShow {
+    BOOL r = %orig;
+    if (DYYYGetBool(@"DYYYHideChallengeStickers")) {
+        return YES;
+    }
+    return r;
+}
+%end
 
 // 隐藏消息页顶栏头像气泡
 %hook AFDSkylightCellBubble
@@ -2936,6 +2858,39 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     for (UIView *subview in siblings) {
         if (subview != self) {
             [subview removeFromSuperview];
+        }
+    }
+}
+%end
+
+// 隐藏合集和声明
+%hook AWEAntiAddictedNoticeBarView
+- (void)layoutSubviews {
+    %orig;
+
+    // 获取 tipsLabel 属性
+    UILabel *tipsLabel = [self valueForKey:@"tipsLabel"];
+
+    if (tipsLabel && [tipsLabel isKindOfClass:%c(UILabel)]) {
+        NSString *labelText = tipsLabel.text;
+
+        if (labelText) {
+            // 明确判断是合集还是作者声明
+            if ([labelText containsString:@"合集"]) {
+                // 如果是合集，只检查合集的开关
+                if (DYYYGetBool(@"DYYYHideTemplateVideo")) {
+                    [self removeFromSuperview];
+                    return;
+                } else if (DYYYGetBool(@"DYYYEnableFullScreen")) {
+                    self.backgroundColor = [UIColor clearColor];
+                }
+            } else {
+                // 如果不是合集（即作者声明），只检查声明的开关
+                if (DYYYGetBool(@"DYYYHideAntiAddictedNotice")) {
+                    [self removeFromSuperview];
+                    return;
+                }
+            }
         }
     }
 }
@@ -2990,6 +2945,24 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
+// 移除下面推荐框黑条
+%hook AWEPlayInteractionRelatedVideoView
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideBottomRelated")) {
+        [self removeFromSuperview];
+    }
+}
+%end
+
+%hook AWEFeedRelatedSearchTipView
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideBottomRelated")) {
+        [self removeFromSuperview];
+    }
+}
+%end
 
 %hook AWELeftSideBarEntranceView
 
@@ -3158,68 +3131,6 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
             return;
         }
     }
-}
-
-%end
-
-// 推荐页低赞过滤（最终稳定版）
-%hook AWEHotListDataController
-
-- (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
-
-    NSArray *orig = %orig;
-    if (!orig || orig.count == 0) return orig;
-
-    // 插件开关控制
-    if (!DYYYGetBool(@"DYYYFilterLowLikesEnable")) {
-        return orig;
-    }
-
-    NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
-    if (threshold <= 0) return orig;
-
-    // ✅ 精准判断推荐页
-    UIViewController *vc = [self valueForKey:@"viewController"];
-    NSString *vcName = NSStringFromClass([vc class]);
-
-    if (![vcName containsString:@"Recommend"] &&
-        ![vcName containsString:@"HotList"]) {
-        // 不是推荐页 → 不做过滤
-        return orig;
-    }
-
-    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
-
-    for (id obj in orig) {
-
-        // 排除非视频对象（广告、Banner等）
-        if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
-            [filtered addObject:obj];
-            continue;
-        }
-
-        AWEAwemeModel *m = (AWEAwemeModel *)obj;
-
-        // 排除广告视频
-        if (m.isAds) {
-            [filtered addObject:obj];
-            continue;
-        }
-
-        // 排除自己作品
-        if (m.author && m.author.isSelf) {
-            [filtered addObject:obj];
-            continue;
-        }
-
-        // 点赞数过滤
-        NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
-        if (!digg || digg.integerValue >= threshold) {
-            [filtered addObject:obj];
-        }
-    }
-
-    return filtered;
 }
 
 %end
@@ -3449,7 +3360,64 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 }
 %end
 
+// 隐藏昵称上方元素
+%hook AWEFeedAnchorContainerView
 
+- (void)layoutSubviews {
+    %orig;
+    BOOL hideFeedAnchor = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
+    BOOL hideLocation = DYYYGetBool(@"DYYYHideLocation");
+    if (hideFeedAnchor && hideLocation) {
+        self.hidden = YES;
+        return;
+    } else if (hideFeedAnchor || hideLocation) {
+        BOOL isLocation = NO;
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:%c(AWEFeedTemplateAnchorView)] || [subview isKindOfClass:%c(AWEPOITradeEntryAnchorView)]) {
+                isLocation = YES;
+                break;
+            }
+        }
+        if ((isLocation && hideLocation) || (!isLocation && hideFeedAnchor)) {
+            self.hidden = YES;
+            return;
+        }
+    }
+}
+
+%end
+
+%hook AWEFeedTemplateAnchorView
+
+- (void)layoutSubviews {
+    %orig;
+
+    BOOL hideFeedAnchor = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
+    BOOL hideLocation = DYYYGetBool(@"DYYYHideLocation");
+
+    if (!hideFeedAnchor && !hideLocation)
+        return;
+
+    AWECodeGenCommonAnchorBasicInfoModel *anchorInfo = [self valueForKey:@"templateAnchorInfo"];
+    if (!anchorInfo || ![anchorInfo respondsToSelector:@selector(name)])
+        return;
+
+    NSString *name = [anchorInfo valueForKey:@"name"];
+    BOOL isPoi = [name isEqualToString:@"poi_poi"];
+
+    if ((hideFeedAnchor && !isPoi) || (hideLocation && isPoi)) {
+        UIView *parentView = self.superview;
+        if (parentView) {
+            UIView *grandparentView = parentView.superview;
+            if (grandparentView && [grandparentView isKindOfClass:%c(AWEBaseElementView)]) {
+                [grandparentView removeFromSuperview];
+                return;
+            }
+        }
+    }
+}
+
+%end
 
 %hook AWEPlayInteractionSearchAnchorView
 
@@ -3463,6 +3431,20 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
+%hook AWEAwemeMusicInfoView
+
+- (void)layoutSubviews {
+    if (DYYYGetBool(@"DYYYHideQuqishuiting")) {
+        UIView *parentView = self.superview;
+        if (parentView) {
+            [parentView removeFromSuperview];
+        }
+        return;
+    }
+    %orig;
+}
+
+%end
 
 // 隐藏暂停关键词
 %hook AWEFeedPauseRelatedWordComponent
@@ -3504,6 +3486,17 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
     }
 }
 
+%end
+
+// 隐藏短剧合集
+%hook AWETemplatePlayletView
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideTemplatePlaylet")) {
+        [self removeFromSuperview];
+    }
+}
 %end
 
 // 隐藏视频顶部搜索框、隐藏搜索框背景、应用全局透明
@@ -3588,7 +3581,40 @@ static NSArray *DYYYIMMenuItemsByAddingDownloadAction(NSArray *menuItems, id cel
 
 %end
 
+// 隐藏下面底部热点框
 
+%hook AWETemplateHotspotView
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideHotspot")) {
+        [self removeFromSuperview];
+        return;
+    }
+}
+
+%end
+
+%hook AWEHomePageBubbleLiveHeadLabelContentView
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideConcernCapsuleView")) {
+        UIView *parentView = self.superview;
+        UIView *grandparentView = parentView.superview;
+
+        if (grandparentView) {
+            grandparentView.hidden = YES;
+            return;
+        } else if (parentView) {
+            parentView.hidden = YES;
+            return;
+        } else {
+            self.hidden = YES;
+            return;
+        }
+    }
+}
+%end
 
 // 隐藏直播发现
 %hook AWEFeedLiveTabRevisitControlView
@@ -4390,6 +4416,74 @@ static NSHashTable *processedParentViews = nil;
 }
 %end
 
+// 屏蔽青少年模式弹窗
+%hook AWEChildModeModuleService
+- (BOOL)shouldShowTeenModeAlert {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return NO;
+    }
+    return %orig;
+}
+%end
+
+%hook AWEDigitalWellbeingAlertManager
+- (BOOL)teenModeShouldAlertInFeed {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (BOOL)teenModeShouldAlertInFirstPage {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (BOOL)teenModeShouldAlertInTime {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (BOOL)teenModeShouldAlertAfterRandom {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (BOOL)shouldShowTeenModeIntroductionAlert {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (void)showTeenModeIntroductionAlert {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return;
+    }
+    %orig;
+}
+
+- (void)showTeenModeSimpleStyleIntroductionAlert {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return;
+    }
+    %orig;
+}
+
+- (void)showTeenModeIntroductionAlertWithPolling {
+    if (DYYYGetBool(@"DYYYHideTeenMode")) {
+        return;
+    }
+    %orig;
+}
+%end
+
 %hook AWEAwemeModel
 
 - (id)initWithDictionary:(id)arg1 error:(id *)arg2 {
@@ -4413,10 +4507,9 @@ static NSHashTable *processedParentViews = nil;
     BOOL shouldFilterHotSpot = skipHotSpot && self.hotSpotLynxCardModel;
     BOOL shouldFilterRecLive = skipLive && (self.cellRoom != nil);
     BOOL shouldFilterAllLive = skipAllLive && [self.videoFeedTag isEqualToString:@"直播中"];
-    BOOL shouldskipPhoto = skipPhoto && (self.awemeType == 68) && [self.referString isEqualToString:@"homepage_hot"];
-    BOOL shouldskipPhotoText = skipPhotoText && self.isNewTextMode && [self.referString isEqualToString:@"homepage_hot"];
+    BOOL shouldskipPhoto = skipPhoto && (self.awemeType == 68) && self.shareRecExtra;
+    BOOL shouldskipPhotoText = skipPhotoText && self.isNewTextMode && self.shareRecExtra;
     BOOL shouldFilterHDR = NO;
-    BOOL shouldFilterLowLikes = NO;
     BOOL shouldFilterKeywords = NO;
     BOOL shouldFilterProp = NO;
     BOOL shouldFilterTime = NO;
@@ -4442,7 +4535,7 @@ static NSHashTable *processedParentViews = nil;
     NSString *filterUsers = [[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYFilterUsers"];
 
     // 检查是否需要过滤特定用户
-    if ([self.referString isEqualToString:@"homepage_hot"] && filterUsers.length > 0 && self.author) {
+    if (self.shareRecExtra && ![self.shareRecExtra isEqual:@""] && filterUsers.length > 0 && self.author) {
         NSArray *usersList = [filterUsers componentsSeparatedByString:@","];
         NSString *currentShortID = self.author.shortID;
         NSString *currentNickname = self.author.nickname;
@@ -4464,9 +4557,8 @@ static NSHashTable *processedParentViews = nil;
         }
     }
 
-
-
-
+    // 只有当shareRecExtra不为空时才过滤关键词
+    if (self.shareRecExtra && ![self.shareRecExtra isEqual:@""]) {
         // 过滤包含特定关键词的视频
         if (keywordsList.count > 0) {
             // 检查视频标题
@@ -4507,7 +4599,7 @@ static NSHashTable *processedParentViews = nil;
                 shouldFilterTime = (timeDifference > threshold);
             }
         }
-    
+    }
 
     // 检查是否为HDR视频
     if (filterHDR && self.video && self.video.bitrateModels) {
@@ -4522,7 +4614,7 @@ static NSHashTable *processedParentViews = nil;
             }
         }
     }
-    return shouldFilterAds || shouldFilterRecLive || shouldFilterAllLive || shouldFilterHotSpot || shouldskipPhoto || shouldskipPhotoText || shouldFilterHDR || shouldFilterLowLikes || shouldFilterKeywords || shouldFilterProp ||
+    return shouldFilterAds || shouldFilterRecLive || shouldFilterAllLive || shouldFilterHotSpot || shouldskipPhoto || shouldskipPhotoText || shouldFilterHDR || shouldFilterKeywords || shouldFilterProp ||
            shouldFilterTime || shouldFilterUser;
 }
 
@@ -4563,6 +4655,10 @@ static NSHashTable *processedParentViews = nil;
     %orig(extras);
 }
 
+- (BOOL)preventDownload {
+    return NO;
+}
+
 // 固定设置为 1，启用自定义背景色
 - (NSUInteger)awe_playerBackgroundViewShowType {
     if ([[NSUserDefaults standardUserDefaults] objectForKey:@"DYYYVideoBGColor"]) {
@@ -4582,634 +4678,7 @@ static NSHashTable *processedParentViews = nil;
     return %orig;
 }
 
-//屏蔽章节要点数据
-- (NSArray *)chapterList {
-	BOOL hideChapterList = DYYYGetBool(@"DYYYHideChapterProgress");
-	if (hideChapterList) {
-		return @[]; // 返回空数组
-	}
-	return %orig;
-}
-
-// 屏蔽共创数据
-- (id)acceptedCoCreators {
-	BOOL DYYYHideGongChuang = DYYYGetBool(@"DYYYHideGongChuang");
-	if (DYYYHideGongChuang) {
-		return @[]; // 永远为空
-	}
-	return %orig;
-}
-
-- (id)unAcceptedCoCreators {
-	BOOL DYYYHideGongChuang = DYYYGetBool(@"DYYYHideGongChuang");
-	if (DYYYHideGongChuang) {
-		return @[];
-	}
-	return %orig;
-}
-
-- (NSInteger)acceptedCoCreatorsNums {
-	BOOL DYYYHideGongChuang = DYYYGetBool(@"DYYYHideGongChuang");
-	if (DYYYHideGongChuang) {
-		return 0;
-	}
-	return %orig;
-}
-
-- (id)awe_coCreatorPoster {
-	BOOL DYYYHideGongChuang = DYYYGetBool(@"DYYYHideGongChuang");
-	if (DYYYHideGongChuang) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (id)awe_coCreatorFromAuthor {
-	BOOL DYYYHideGongChuang = DYYYGetBool(@"DYYYHideGongChuang");
-	if (DYYYHideGongChuang) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (id)awe_userModelWithCoCreator:(id)creator {
-	BOOL DYYYHideGongChuang = DYYYGetBool(@"DYYYHideGongChuang");
-	if (DYYYHideGongChuang) {
-		return nil;
-	}
-	return %orig;
-}
-
-
-// 屏蔽相关视频推荐
-- (id)relatedVideoExtra {
-	BOOL DYYYHideBottomRelated = DYYYGetBool(@"DYYYHideBottomRelated");
-	if (DYYYHideBottomRelated) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (id)relatedVideo {
-	BOOL DYYYHideBottomRelated = DYYYGetBool(@"DYYYHideBottomRelated");
-	if (DYYYHideBottomRelated) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (id)playletRelatedVideoInfoModel {
-	BOOL DYYYHideBottomRelated = DYYYGetBool(@"DYYYHideBottomRelated");
-	if (DYYYHideBottomRelated) {
-		return nil;
-	}
-	return %orig;
-}
-
-// 屏蔽评论搜索锚点
-- (id)commonSearchAnchor {
-	BOOL DYYYHideCommentLongPressSearch = DYYYGetBool(@"DYYYHideCommentLongPressSearch");
-	if (DYYYHideCommentLongPressSearch) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setCommonSearchAnchor:(id)arg {
-	BOOL DYYYHideCommentLongPressSearch = DYYYGetBool(@"DYYYHideCommentLongPressSearch");
-	if (DYYYHideCommentLongPressSearch) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-// 屏蔽汽水音乐锚点
-- (id)relatedMusicAnchor {
-	BOOL DYYYHideQuqishuiting = DYYYGetBool(@"DYYYHideQuqishuiting");
-	if (DYYYHideQuqishuiting) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setRelatedMusicAnchor:(id)anchor {
-	BOOL DYYYHideQuqishuiting = DYYYGetBool(@"DYYYHideQuqishuiting");
-	if (DYYYHideQuqishuiting) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-// 屏蔽底栏热点
-- (id)hotSpotRawData {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setHotSpotRawData:(id)data {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)hotSpotListModel {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setHotSpotListModel:(id)model {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (NSString *)templateBarsString {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @"";
-	}
-	return %orig;
-}
-
-- (void)setTemplateBarsString:(NSString *)string {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		%orig(@"");
-		return;
-	}
-	%orig;
-}
-
-// 屏蔽底部合集（只对推荐页生效）
-- (id)mixInfo {
-	BOOL DYYYHideTemplateVideo = DYYYGetBool(@"DYYYHideTemplateVideo");
-	if (DYYYHideTemplateVideo && [self.referString isEqualToString:@"homepage_hot"]) {
-		return nil;
-	}
-	return %orig;
-}
-
-// 屏蔽短剧信息（复用屏蔽合集开关，只对推荐页生效）
-- (id)playletInfoModel {
-	BOOL DYYYHideTemplatePlaylet = DYYYGetBool(@"DYYYHideTemplatePlaylet");
-	if (DYYYHideTemplatePlaylet && [self.referString isEqualToString:@"homepage_hot"]) {
-		return nil;
-	}
-	return %orig;
-}
-
-// 屏蔽锚点信息
-- (id)anchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)localLifeAnchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setLocalLifeAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)nearbyFeedDualAnchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setNearbyFeedDualAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)minorAnchorInfo {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setMinorAnchorInfo:(id)info {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-// 屏蔽通用锚点（合并到锚点信息）
-- (id)commonAnchor {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) { 
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setCommonAnchor:(id)anchor {
-	BOOL DYYYHideFeedAnchorContainer = DYYYGetBool(@"DYYYHideFeedAnchorContainer");
-	if (DYYYHideFeedAnchorContainer) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-// 屏蔽作者声明及风险提示
-- (id)riskInfoModel {
-	BOOL DYYYHideAntiAddictedNotice = DYYYGetBool(@"DYYYHideAntiAddictedNotice");
-	if (DYYYHideAntiAddictedNotice) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setRiskInfoModel:(id)model {
-	BOOL DYYYHideAntiAddictedNotice = DYYYGetBool(@"DYYYHideAntiAddictedNotice");
-	if (DYYYHideAntiAddictedNotice) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
 %end
-
-
-
-//以下部分为新增
-// 屏蔽头像光圈
-%hook AWEUserModel
-
-- (id)storyRing {
-	BOOL DYYYHideAvatarRing = DYYYGetBool(@"DYYYHideAvatarRing");
-	if (DYYYHideAvatarRing) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setStoryRing:(id)ring {
-	BOOL DYYYHideAvatarRing = DYYYGetBool(@"DYYYHideAvatarRing");
-	if (DYYYHideAvatarRing) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-%end
-
-%hook AWECodeGenStoryRingInfoModel
-
-- (NSArray *)storyRingsModelArray {
-	BOOL DYYYHideAvatarRing = DYYYGetBool(@"DYYYHideAvatarRing");
-	if (DYYYHideAvatarRing) {
-		return @[];
-	}
-	return %orig;
-}
-
-- (void)setStoryRingsModelArray:(NSArray *)array {
-	BOOL DYYYHideAvatarRing = DYYYGetBool(@"DYYYHideAvatarRing");
-	if (DYYYHideAvatarRing) {
-		%orig(@[]);
-		return;
-	}
-	%orig;
-}
-
-%end
-
-// 屏蔽挑战贴纸
-%hook AWEInteractionHashtagStickerModel
-
-- (id)hashtagInfo {
-	BOOL DYYYHideChallengeStickers = DYYYGetBool(@"DYYYHideChallengeStickers");
-	if (DYYYHideChallengeStickers) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setHashtagInfo:(id)info {
-	BOOL DYYYHideChallengeStickers = DYYYGetBool(@"DYYYHideChallengeStickers");
-	if (DYYYHideChallengeStickers) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-- (id)hashtagId {
-	BOOL DYYYHideChallengeStickers = DYYYGetBool(@"DYYYHideChallengeStickers");
-	if (DYYYHideChallengeStickers) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (id)hashtagName {
-	BOOL DYYYHideChallengeStickers = DYYYGetBool(@"DYYYHideChallengeStickers");
-	if (DYYYHideChallengeStickers) {
-		return nil;
-	}
-	return %orig;
-}
-
-%end
-
-// 屏蔽互动贴纸（复用挑战贴纸开关）
-%hook AWEInteractionEditTagStickerModel
-
-- (id)editTagInfo {
-	BOOL DYYYHideChallengeStickers = DYYYGetBool(@"DYYYHideChallengeStickers");
-	if (DYYYHideChallengeStickers) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setEditTagInfo:(id)info {
-	BOOL DYYYHideChallengeStickers = DYYYGetBool(@"DYYYHideChallengeStickers");
-	if (DYYYHideChallengeStickers) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-%end
-
-
-// 隐藏下面底部热点框
-%hook AWEHotSpotListModel
-
-- (BOOL)disableDisplay {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return YES;
-	}
-	return %orig;
-}
-
-- (BOOL)disableDisplayInner {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return YES;
-	}
-	return %orig;
-}
-
-- (NSString *)hotSpotTipTitleHeader {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @"";
-	}
-	return %orig;
-}
-
-- (NSString *)hotSpotTipTitle {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @"";
-	}
-	return %orig;
-}
-
-- (NSString *)hotSpotTipTitleFooter {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @"";
-	}
-	return %orig;
-}
-
-- (NSString *)hotInfoWord {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @"";
-	}
-	return %orig;
-}
-
-- (NSString *)i18NTipTitle {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @"";
-	}
-	return %orig;
-}
-
-- (NSString *)tipSchema {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (NSDictionary *)extraDictionary {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @{};
-	}
-	return %orig;
-}
-
-- (NSDictionary *)relativityExtra {
-	BOOL DYYYHideHotspot = DYYYGetBool(@"DYYYHideHotspot");
-	if (DYYYHideHotspot) {
-		return @{};
-	}
-	return %orig;
-}
-
-%end
-
-// 屏蔽汽水音乐锚点 - hook AWERelatedMusicAnchorModel
-%hook AWERelatedMusicAnchorModel
-
-- (instancetype)init {
-	BOOL DYYYHideQuqishuiting = DYYYGetBool(@"DYYYHideQuqishuiting");
-	if (DYYYHideQuqishuiting) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (instancetype)initWithDictionary:(id)dict error:(NSError **)error {
-	BOOL DYYYHideQuqishuiting = DYYYGetBool(@"DYYYHideQuqishuiting");
-	if (DYYYHideQuqishuiting) {
-		return nil;
-	}
-	return %orig;
-}
-
-%end
-
-// 屏蔽汽水音乐 - 清空 commentTopBarInfo
-%hook AWEMusicExtraModel
-
-- (id)commentTopBarInfo {
-	BOOL DYYYHideQuqishuiting = DYYYGetBool(@"DYYYHideQuqishuiting");
-	if (DYYYHideQuqishuiting) {
-		return nil;
-	}
-	return %orig;
-}
-
-- (void)setCommentTopBarInfo:(id)info {
-	BOOL DYYYHideQuqishuiting = DYYYGetBool(@"DYYYHideQuqishuiting");
-	if (DYYYHideQuqishuiting) {
-		%orig(nil);
-		return;
-	}
-	%orig;
-}
-
-%end
-
-
-// 拦截开屏广告 - hook TTAdSplashModel，直接返回 nil
-%hook TTAdSplashModel
-
-+ (id)alloc {
-	if (DYYYGetBool(@"DYYYNoAds")) {
-		return nil;  // 直接返回 nil，阻止对象创建
-	}
-	return %orig;
-}
-
-%end
-
-%hook AWEOriginalAdModel
-- (instancetype)init {
-	BOOL noAds = DYYYGetBool(@"DYYYNoAds");
-	if (noAds) {
-		return nil;  // 阻止创建，直接返回 nil
-	}
-	return %orig;
-}
-
-- (instancetype)initWithDictionary:(id)dict error:(NSError **)error {
-	BOOL noAds = DYYYGetBool(@"DYYYNoAds");
-	if (noAds) {
-		return nil;  // 阻止创建，直接返回 nil
-	}
-	return %orig;
-}
-%end
-
-// 屏蔽 AWEGeneralSearchModel 中的广告卡（强判定）
-%hook AWEGeneralSearchModel
-- (instancetype)initWithDictionary:(id)dict error:(NSError **)error {
-	id orig = %orig;
-	
-	BOOL noAds = DYYYGetBool(@"DYYYNoAds");
-	if (!noAds || !orig) {
-		return orig;
-	}
-	
-	// 强判定：检查是否为广告卡（检查 commonDynamicPatchModel.is_ad == 1）
-	if ([[orig valueForKeyPath:@"commonDynamicPatchModel.is_ad"] integerValue] == 1) {
-		return nil;
-	}
-	
-	return orig;
-}
-%end
-
-// 去除启动视频广告
-%hook AWEAwesomeSplashFeedCellOldAccessoryView
-
-// 在方法入口处添加控制逻辑
-- (id)ddExtraView {
-	if (DYYYGetBool(@"DYYYNoAds")) {
-		return NULL; // 返回空视图
-	}
-
-	// 正常模式调用原始方法
-	return %orig;
-}
-
-%end
-
-// 屏蔽青少年模式弹窗
-%hook AWETeenModeAlertView
-- (BOOL)show {
-	if (DYYYGetBool(@"DYYYHideTeenMode")) {
-		return NO;
-	}
-	return %orig;
-}
-%end
-
-// 屏蔽青少年模式弹窗
-%hook AWETeenModeSimpleAlertView
-- (BOOL)show {
-	if (DYYYGetBool(@"DYYYHideTeenMode")) {
-		return NO;
-	}
-	return %orig;
-}
-%end
-
-
-
-
-
-
-
-
-
-
-
-
 
 %hook AWEFeedCommentConfigModel
 - (void)setCommentInputConfigText:(NSString *)text {
@@ -5245,6 +4714,30 @@ static NSHashTable *processedParentViews = nil;
                 self.backgroundColor = customColor;
         }
     }
+}
+
+%end
+
+// 拦截开屏广告
+%hook BDASplashControllerView
++ (id)alloc {
+    BOOL noAds = DYYYGetBool(@"DYYYNoAds");
+    if (noAds) {
+        return nil;
+    }
+    return %orig;
+}
+%end
+
+// 去除启动视频广告
+%hook AWEAwesomeSplashFeedCellOldAccessoryView
+
+- (id)ddExtraView {
+    if (DYYYGetBool(@"DYYYNoAds")) {
+        return NULL;
+    }
+
+    return %orig;
 }
 
 %end
@@ -6097,20 +5590,6 @@ static void *DYYYTabBarHeightContext = &DYYYTabBarHeightContext;
 
 %end
 
-// 精简平板底栏
-%hook AWETabBarElementContainerView
-
-- (void)setHidden:(BOOL)hidden {
-    if (DYYYGetBool(@"DYYYHidePadTabBarElements")) {
-        %orig(YES);
-        return;
-    }
-
-    %orig(hidden);
-}
-
-%end
-
 %hook AWENormalModeTabBarBadgeContainerView
 
 - (void)layoutSubviews {
@@ -6531,26 +6010,6 @@ static void *DYYYTabBarHeightContext = &DYYYTabBarHeightContext;
     return view;
 }
 
-- (void)setBackgroundColor:(UIColor *)backgroundColor {
-    if (![NSThread isMainThread]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-          [self setBackgroundColor:backgroundColor];
-        });
-        return;
-    }
-
-    if (DYYYGetBool(@"DYYYEnableFullScreen")) {
-        UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-        if ([vc isKindOfClass:%c(AWEAwemeDetailTableViewController)] ||
-            [vc isKindOfClass:%c(AWEAwemeDetailCellViewController)]) {
-            %orig([UIColor clearColor]);
-            return;
-        }
-    }
-
-    %orig(backgroundColor);
-}
-
 - (void)layoutSubviews {
     %orig;
 
@@ -6584,7 +6043,7 @@ static void *DYYYTabBarHeightContext = &DYYYTabBarHeightContext;
         return;
     }
 
-    BOOL enableBlur = DYYYGetBool(@"DYYYEnableCommentBlur");
+    // BOOL enableBlur = DYYYGetBool(@"DYYYEnableCommentBlur");
     BOOL enableFS = DYYYGetBool(@"DYYYEnableFullScreen");
 
     UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
@@ -6598,7 +6057,7 @@ static void *DYYYTabBarHeightContext = &DYYYTabBarHeightContext;
                      (PlayVCClass2 && [vc isKindOfClass:PlayVCClass2]) ||
                      (PlayVCClass3 && [vc isKindOfClass:PlayVCClass3]));
 
-    if (isPlayVC && enableBlur) {
+    if (isPlayVC) {
         if (frame.origin.x != 0) {
             return;
         }
@@ -6792,30 +6251,18 @@ static void *DYYYTabBarHeightContext = &DYYYTabBarHeightContext;
         static NSNumber *shouldRestoreChat = nil;
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
-            BOOL includeChat = NO;
-            AWEVersionUpdateManager *manager = [%c(AWEVersionUpdateManager) sharedInstance];
-            NSString *currentVersion = manager.currentVersion;
-            if (currentVersion.length > 0) {
-                NSComparisonResult cmp1 = [DYYYUtils compareVersion:currentVersion toVersion:@"35.5.0"];
-                NSComparisonResult cmp2 = [DYYYUtils compareVersion:currentVersion toVersion:@"37.2.0"];
-                BOOL enableForIMMediaDetail = YES;
-                // 检查 ABTest 配置（大于 37.2.0 时需看 ABTest 状态）
-                if (cmp2 != NSOrderedAscending) {
-                    id abTestMgr = [%c(AWEABTestManager) sharedManager];
-                    NSDictionary *abDic = [abTestMgr consistentABTestDic];
-                    NSDictionary *imOpt = [abDic objectForKey:@"im_media_detail_page_opt"];
-                    if ([imOpt isKindOfClass:[NSDictionary class]]) {
-                        id enableValue = [imOpt objectForKey:@"enable"];
-                        if ([enableValue respondsToSelector:@selector(boolValue)]) {
-                            enableForIMMediaDetail = [enableValue boolValue];
-                        }
-                    }
-                }
-                if (cmp1 == NSOrderedAscending || (cmp2 != NSOrderedAscending && enableForIMMediaDetail)) {
-                    includeChat = YES;
-                }
-            }
-            shouldRestoreChat = @(includeChat);
+          BOOL includeChat = NO;
+          Class managerClass = %c(AWEVersionUpdateManager);
+          if (managerClass && [managerClass respondsToSelector:@selector(sharedInstance)]) {
+              AWEVersionUpdateManager *manager = [managerClass sharedInstance];
+              if ([manager respondsToSelector:@selector(currentVersion)]) {
+                  NSString *currentVersion = manager.currentVersion;
+                  if (currentVersion.length > 0) {
+                      includeChat = ([DYYYUtils compareVersion:currentVersion toVersion:@"35.5.0"] == NSOrderedAscending);
+                  }
+              }
+          }
+          shouldRestoreChat = @(includeChat);
         });
 
         if (shouldRestoreChat.boolValue) {
@@ -7068,7 +6515,6 @@ static void *DYYYTabBarHeightContext = &DYYYTabBarHeightContext;
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    // self.view.hidden = YES;
     if (DYYYGetBool(@"DYYYEnableFullScreen")) {
         UIView *contentView = self.contentView;
         if (contentView && contentView.superview) {
@@ -7081,14 +6527,6 @@ static void *DYYYTabBarHeightContext = &DYYYTabBarHeightContext;
             } else if (frame.size.height == parentHeight - (gCurrentTabBarHeight * 2)) {
                 frame.size.height = parentHeight - gCurrentTabBarHeight;
                 contentView.frame = frame;
-            } else if (fabs(frame.size.height - parentHeight) < 1.0) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    CGRect dFrame = contentView.frame;
-                    if (fabs(dFrame.size.height - (parentHeight + gCurrentTabBarHeight)) > 1.0) {
-                        dFrame.size.height += gCurrentTabBarHeight;
-                        contentView.frame = dFrame;
-                    }
-                });
             }
         }
     }
@@ -7558,15 +6996,36 @@ static Class TagViewClass = nil;
             if (scaleValue.length > 0) {
                 CGFloat scale = [scaleValue floatValue];
                 if (scale > 0 && scale != 1.0) {
-                    NSArray *subviews = [self.subviews copy];
-                    CGFloat ty = 0;
-                    for (UIView *view in subviews) {
-                        CGFloat viewHeight = view.frame.size.height;
-                        ty += (viewHeight - viewHeight * scale) / 2;
-                    }
-                    CGFloat frameWidth = self.frame.size.width;
-                    CGFloat right_tx = (frameWidth - frameWidth * scale) / 2;
-                    self.transform = CGAffineTransformMake(scale, 0, 0, scale, right_tx, ty);
+                    CGFloat boundsWidth = self.bounds.size.width;
+                    CGFloat boundsHeight = self.bounds.size.height;
+                    CGFloat scaledHeight = boundsHeight * scale;
+                    CGFloat scaledWidth = boundsWidth * scale;
+                    
+                    // 固定边距
+                    CGFloat bottomMargin = 5.0;
+                    CGFloat rightMargin = 4.0;
+                    
+                    // 屏幕宽度
+                    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
+                    
+                    // 时间标签Y
+                    CGFloat timeLabelY = gProgressContainerY + 190.0;
+                    
+                    // 目标位置
+                    CGFloat targetBottomY = timeLabelY - bottomMargin;
+                    CGFloat targetTopY = targetBottomY - scaledHeight;
+                    CGFloat targetRightX = screenWidth - rightMargin;
+                    CGFloat targetLeftX = targetRightX - scaledWidth;
+                    
+                    // 目标中心点
+                    CGFloat targetCenterX = targetLeftX + scaledWidth / 2;
+                    CGFloat targetCenterY = targetTopY + scaledHeight / 2;
+                    
+                    // 平移量
+                    CGFloat tx = targetCenterX - self.center.x;
+                    CGFloat ty = targetCenterY - self.center.y;
+                    
+                    self.transform = CGAffineTransformMake(scale, 0, 0, scale, tx, ty);
                 } else {
                     self.transform = CGAffineTransformIdentity;
                 }
@@ -7903,24 +7362,8 @@ static Class TagViewClass = nil;
 %hook AWEStoryProgressContainerView
 - (void)setCenter:(CGPoint)center {
     UIViewController *vc = [DYYYUtils firstAvailableViewControllerFromView:self];
-    BOOL shouldAdjust = [vc isKindOfClass:NSClassFromString(@"AWEFeedPlayControlImpl.PureModePageCellViewController")] && DYYYGetBool(@"DYYYEnableFullScreen");
-    if (shouldAdjust) {
-        NSString *currentVersion = nil;
-        Class managerClass = %c(AWEVersionUpdateManager);
-        if (managerClass && [managerClass respondsToSelector:@selector(sharedInstance)]) {
-            id manager = [managerClass sharedInstance];
-            if ([manager respondsToSelector:@selector(currentVersion)]) {
-                currentVersion = [manager currentVersion];
-            }
-        }
-        
-        BOOL shouldApply = YES;
-        if (currentVersion && [DYYYUtils compareVersion:currentVersion toVersion:@"37.2.0"] != NSOrderedAscending) {
-            shouldApply = NO;
-        }
-        if (shouldApply) {
-            center.y -= gCurrentTabBarHeight;
-        }
+    if ([vc isKindOfClass:NSClassFromString(@"AWEFeedPlayControlImpl.PureModePageCellViewController")] && DYYYGetBool(@"DYYYEnableFullScreen")) {
+        center.y -= gCurrentTabBarHeight;
     }
     %orig(center);
 }
@@ -8093,6 +7536,18 @@ static Class TagViewClass = nil;
 
 %end
 
+// 隐藏章节进度条
+%hook AWEDemaciaChapterProgressSlider
+
+- (void)layoutSubviews {
+    %orig;
+    if (DYYYGetBool(@"DYYYHideChapterProgress")) {
+        [self removeFromSuperview];
+    }
+}
+
+%end
+
 // 隐藏上次看到
 %hook DUXPopover
 - (void)layoutSubviews {
@@ -8232,121 +7687,34 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 @end
 
 // 修复 ios26 模态透明效果
-// %hook UIDropShadowView
+%hook UIDropShadowView
 
-// - (void)didMoveToSuperview {
-//     %orig;
+- (void)didMoveToSuperview {
+    %orig;
 
-//     if (@available(iOS 26.0, *)) {
-//         self.backgroundColor = UIColor.clearColor;
-//         self.opaque = NO;
-//     }
-// }
-
-// - (void)layoutSubviews {
-//     %orig;
-
-//     if (@available(iOS 26.0, *)) {
-//         self.backgroundColor = UIColor.clearColor;
-//         self.opaque = NO;
-//     }
-// }
-
-// - (void)setBackgroundColor:(UIColor *)color {
-//     if (@available(iOS 26.0, *)) {
-//         %orig(UIColor.clearColor);
-//         return;
-//     }
-//     %orig;
-// }
-
-// %end
-
-%group CommentLongPressPanelReportElementGroup
-
-%hook AWECommentLongPressPanelSwiftImpl_CommentLongPressPanelReportElement
-
-- (BOOL)elementShouldShow {
-    BOOL shouldShow = %orig;
-    // if (!DYYYGetBool(DYYY_SAVE_COMMENT_AUDIO_KEY)) {
-    //     return shouldShow;
-    // }
-    
-    AWECommentLongPressPanelContext *context = [self commentPageContext];
-    AWECommentModel *comment = [context selectdComment] ?: [[context params] selectdComment];
-    
-    if (comment && comment.audioModel && comment.audioModel.content) {
-        return YES;
+    if (@available(iOS 26.0, *)) {
+        self.backgroundColor = UIColor.clearColor;
+        self.opaque = NO;
     }
-    
-    return shouldShow;
-}
-- (id)elementContent {
-    if (!DYYYGetBool(DYYY_SAVE_COMMENT_AUDIO_KEY)) {
-        return %orig;
-    }
-    
-    AWECommentLongPressPanelContext *context = [self commentPageContext];
-    AWECommentModel *comment = [context selectdComment] ?: [[context params] selectdComment];
-    
-    if (comment && comment.audioModel && comment.audioModel.content) {
-        return @"下载";
-    }
-    
-    return %orig;
 }
 
-- (id)elementImage {
-    if (!DYYYGetBool(DYYY_SAVE_COMMENT_AUDIO_KEY)) {
-        return %orig;
+- (void)layoutSubviews {
+    %orig;
+
+    if (@available(iOS 26.0, *)) {
+        self.backgroundColor = UIColor.clearColor;
+        self.opaque = NO;
     }
-    
-    AWECommentLongPressPanelContext *context = [self commentPageContext];
-    AWECommentModel *comment = [context selectdComment] ?: [[context params] selectdComment];
-    
-    if (comment && comment.audioModel && comment.audioModel.content) {
-        UIImage *downloadIcon = [UIImage systemImageNamed:@"arrow.down.circle"];
-        UIGraphicsBeginImageContextWithOptions(downloadIcon.size, NO, downloadIcon.scale);
-        [[UIColor redColor] setFill];
-        [downloadIcon drawInRect:CGRectMake(0, 0, downloadIcon.size.width, downloadIcon.size.height)];
-        UIImage *coloredIcon = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-        return [coloredIcon imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-    }
-    
-    return %orig;
 }
 
-- (void)elementTapped {
-    if (!DYYYGetBool(DYYY_SAVE_COMMENT_AUDIO_KEY)) {
-        %orig;
+- (void)setBackgroundColor:(UIColor *)color {
+    if (@available(iOS 26.0, *)) {
+        %orig(UIColor.clearColor);
         return;
     }
-    
-    AWECommentLongPressPanelContext *context = [self commentPageContext];
-    AWECommentModel *comment = [context selectdComment] ?: [[context params] selectdComment];
-    
-    if (comment && comment.audioModel && comment.audioModel.content) {
-        NSString *audioContent = comment.audioModel.content;
-        
-        NSString *userName = @"未知用户";
-        if (comment.author && [comment.author respondsToSelector:@selector(nickname)]) {
-            NSString *nickname = [comment.author performSelector:@selector(nickname)];
-            if (nickname && nickname.length > 0) {
-                userName = nickname;
-            }
-        }
-        
-        [DYYYManager downloadAndShareCommentAudio:audioContent
-                                         userName:userName
-                                       createTime:comment.createTime];
-        return;
-    }
-    
     %orig;
 }
 
-%end
 %end
 
 %hook AFDViewedBottomView
@@ -8401,33 +7769,6 @@ static NSString *const kHideRecentUsersKey = @"DYYYHideSidebarRecentUsers";
 
 %end
 
-%hook AWEDPlayerProgressContainerView
-
-- (void)layoutSubviews {
-    %orig;
-
-    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"DYYYEnableFullScreen"]) {
-        return;
-    }
-
-    for (UIView *subview in self.subviews) {
-        if ([subview isMemberOfClass:[UIView class]]) {
-            UIColor *bgColor = subview.backgroundColor;
-            if (bgColor) {
-                CGFloat r, g, b, a;
-                if ([bgColor getRed:&r green:&g blue:&b alpha:&a]) {
-                    if (r == 0 && g == 0 && b == 0) {
-                        subview.backgroundColor = [UIColor clearColor];
-                    }
-                }
-            }
-        }
-    }
-}
-
-%end
-
-
 // 隐藏键盘 AI
 static __weak UIView *cachedHideView = nil;
 static void hideParentViewsSubviews(UIView *view) {
@@ -8462,6 +7803,39 @@ static void findTargetViewInView(UIView *view) {
             break;
     }
 }
+
+// 推荐页低赞过滤
+%hook AWEHotListDataController
+
+- (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2 {
+    NSArray *orig = %orig;
+    if (!orig || orig.count == 0) return orig;
+    
+    NSInteger threshold = DYYYGetInteger(@"DYYYFilterLowLikes");
+    if (threshold <= 0) return orig;
+    
+    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:orig.count];
+    for (id obj in orig) {
+        if (![obj isKindOfClass:%c(AWEAwemeModel)]) {
+            [filtered addObject:obj];
+            continue;
+        }
+        AWEAwemeModel *m = (AWEAwemeModel *)obj;
+        // 广告不管
+        if (m.isAds) {
+            [filtered addObject:obj];
+            continue;
+        }
+        // 拿点赞数
+        NSNumber *digg = m.statistics ? m.statistics.diggCount : nil;
+        if (!digg || digg.integerValue >= threshold) {
+            [filtered addObject:obj];
+        }
+    }
+    return filtered;
+}
+
+%end
 
 %ctor {
     Class imMenuComponentClass = objc_getClass("AWEIMCustomMenuComponent");
@@ -8518,10 +7892,6 @@ static void findTargetViewInView(UIView *view) {
         Class commentHeaderGoodsClass = objc_getClass("AWECommentPanelHeaderSwiftImpl.CommentHeaderGoodsView");
         if (commentHeaderGoodsClass) {
             %init(CommentHeaderGoodsGroup, AWECommentPanelHeaderSwiftImpl_CommentHeaderGoodsView = commentHeaderGoodsClass);
-        }
-        Class report = objc_getClass("AWECommentLongPressPanelSwiftImpl.CommentLongPressPanelReportElement");
-        if (report) {
-            %init(CommentLongPressPanelReportElementGroup, AWECommentLongPressPanelSwiftImpl_CommentLongPressPanelReportElement = report);
         }
 
         Class commentHeaderTemplateClass = objc_getClass("AWECommentPanelHeaderSwiftImpl.CommentHeaderTemplateAnchorView");
