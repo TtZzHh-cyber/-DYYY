@@ -1469,3 +1469,72 @@ typedef NS_ENUM(NSUInteger, DYEdgeMode) {
 
 @interface AWEDPlayerProgressContainerView : UIView
 @end
+// 低赞杀手头文件
+// @cookieodd
+
+#import <UIKit/UIKit.h>
+#import <Foundation/Foundation.h>
+
+// 视频统计模型
+@interface AWEAwemeStatisticsModel : NSObject
+@property (nonatomic, strong) NSNumber *diggCount;
+@end
+
+// 直播模型
+@interface AWELiveFollowFeedCellModel : NSObject
+@end
+
+// 用户模型
+@interface AWEUserModel : NSObject
+@property (nonatomic, copy) NSString *nickname;
+@property (nonatomic, copy) NSString *shortID;
+@end
+
+// 视频模型
+@interface AWEAwemeModel : NSObject
+@property (nonatomic, strong) AWEAwemeStatisticsModel *statistics;
+@property (nonatomic, assign) BOOL isAds;
+@property (nonatomic, copy) NSString *descriptionString;
+@property (nonatomic, strong) id hotSpotLynxCardModel;
+@property (nonatomic, strong) AWELiveFollowFeedCellModel *cellRoom;
+@property (nonatomic, strong) AWEUserModel *author;
+@end
+
+// 推荐页数据控制器
+@interface AWEListDataController : NSObject
+@property (nonatomic, strong) NSMutableArray *dataSource;
+@end
+
+@interface AWEHotListDataController : AWEListDataController
+- (id)transferAwemeListIfNeededWithArray:(id)arg1 isInitFetch:(BOOL)arg2;
+@end
+
+// 设置项模型
+@interface AWESettingItemModel : NSObject
+@property (nonatomic, copy) NSString *identifier;
+@property (nonatomic, copy) NSString *title;
+@property (nonatomic, copy) NSString *detail;
+@property (nonatomic, copy) NSString *svgIconImageName;
+@property (nonatomic, assign) NSInteger cellType;
+@property (nonatomic, assign) NSInteger colorStyle;
+@property (nonatomic, assign) BOOL isEnable;
+@property (nonatomic, copy) void (^cellTappedBlock)(void);
+- (void)refreshCell;
+@end
+
+// 设置分区模型
+@interface AWESettingSectionModel : NSObject
+@property (nonatomic, assign) NSInteger type;
+@property (nonatomic, assign) CGFloat sectionHeaderHeight;
+@property (nonatomic, copy) NSString *sectionHeaderTitle;
+@property (nonatomic, strong) NSArray *itemArray;
+@end
+
+// 设置ViewModel
+@interface AWESettingBaseViewModel : NSObject
+@property (nonatomic, weak) id controllerDelegate;
+@property (nonatomic, strong) NSArray *sectionDataArray;
+@end
+
+@interface AWESettingsViewModel : AWESettingBaseViewModel
+@end
